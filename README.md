@@ -1,6 +1,6 @@
 # Java笔记自用
 
-> [https://ricksanchezo137.github.io/notes/](https://ricksanchezo137.github.io/notes/)
+> [click here](https://ricksanchezo137.github.io/RickaSanchezo137/)
 
 ## 算法
 
