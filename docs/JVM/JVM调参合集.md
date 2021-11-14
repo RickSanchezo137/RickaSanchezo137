@@ -16,6 +16,8 @@
 
 显示某个-XX参数：`java -XX:+PrintFlagsInitial`，默认值；`java -XX:+PrintFlagsFinal`，最终值
 
+查看虚拟机运行进程：`jps`
+
 ## 执行引擎
 
 ### 执行模式
@@ -128,7 +130,7 @@ Java HotSpot(TM) 64-Bit Server VM (build 13.0.2+8, mixed mode, sharing)
 
 - 打印GC简要信息：`-XX:+PrintGC`
 - 打印gc细节：`-XX:+PrintGCDetails`
-- 运行中显示进程的GC信息：`jstat -gc pid`
+- 运行中显示进程的GC信息：`jstat -gc pid (查询间隔时间) (查询次数)`
 
 ### 垃圾收集器
 
@@ -193,8 +195,6 @@ Java HotSpot(TM) 64-Bit Server VM (build 13.0.2+8, mixed mode, sharing)
 - `-XX:ParallelGCThreads`：STW时并行的GC线程数，默认为8
 - `-XX:ConcGCThreads`：并发标记时GC线程数，可以设置为ParallelGCThreads的1/4左右
 - `-XX:InitiatingHeapOccupanyPercent`：超过该堆内存占用率值就触发GC，默认为45
-
-
 
 # 参考
 
