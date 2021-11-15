@@ -199,6 +199,8 @@ ERROR 1142 (42000): SELECT command denied to user 'b'@'localhost' for table 'T'
 > 因此，大大提高了数据库的性能
 >
 > 值得注意的是：将redo log写回数据库，同样也需要先修改Buffer Pool，再通过Purge线程刷到数据库
+>
+> [https://xw.qq.com/cmsid/20201207A0AMVF00](https://xw.qq.com/cmsid/20201207A0AMVF00)
 
 这个日志就叫做redo log，是**物理日志**
 
@@ -279,7 +281,8 @@ update语句时的内部流程
    > - 当在写binlog之前崩溃时
    >   重启恢复：后发现没有commit，回滚。备份恢复：没有binlog
    > - 当在commit之前崩溃
-   >   重启恢复：虽没有commit，但满足prepare和binlog完整（通过检查binlog格式特有的结尾，来判断是否完整），所以重启后会自动commit。备份：有binlog 
+   >   - 如果redo log里面的事务是完整的，也就是已经有了commit标识，则直接提交
+   >   - 重启恢复：虽没有commit，但满足prepare和binlog完整（通过XID（redo log和binlog共有的字段）定位到binlog，然后检查binlog格式特有的结尾，来判断是否完整），所以重启后会自动commit。备份：有binlog 
 
 2. 复制数据库，搭建一些备库来增加系统的读能力的时候，现在常见的做法也是用全量备份加上应用binlog来实现的，两阶段提交用于保证主从数据库一致
 
@@ -2554,7 +2557,7 @@ InnoDB引擎支持事务，我们利用好事务的原子性和隔离性，就�
 
 解：并发系统性能的角度考虑，应该先插入操作记录，再更新计数表。因为更新计数表涉及到行锁的竞争，先插入再更新能最大程度地减少事务之间的锁等待，提升并发度
 
-# 上期问题时间
+
 
 # 参考
 
