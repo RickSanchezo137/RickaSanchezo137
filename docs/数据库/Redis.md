@@ -2419,58 +2419,24 @@ Redis 如果使用 32bit 进行编译，内部所有数据结构所使用的指�
 
 如果 Redis 内部管理的集合数据结构很小，它会使用紧凑存储形式压缩存储；只有当数据量大于某值后，为了提升查找效率，会转换成标准结构
 
-#### ziplist
-
-Redis 的 ziplist 是一个紧凑的字节数组结构
-
-![image-20211112145818127](img\redis\98.gif)
-
-- 如果它存储的是 hash 结构，那么 key 和 value 会作为两个 entry 相邻存在一起
-- 如果它存储的是 zset，那么 value 和 score 会作为两个 entry 相邻存在一起
-
-```sh
-Aliyun2G:0>hset hkey f1 v1
-"1"
-Aliyun2G:0>object encoding hkey
-"ziplist"
-
-Aliyun2G:0>zadd zkey 99 xiaoming
-"1"
-Aliyun2G:0>object encoding zkey
-"ziplist"
-```
-
-#### intset
-
-Redis 的 intset 是一个紧凑的整数数组结构，它用于存放元素都是整数的并且元素个数较少的 set 集合
-
-如果整数可以用 uint16 表示，那么 intset 的元素就是 16 位的数组，如果新加入的整数超过了 uint16 的表示范围，那么就使用 uint32 表示，如果新加入的元素超过了 uint32 的表示范围，那么就使用 uint64 表示，Redis 支持 set 集合动态从 uint16 升级到 uint32，再升级到 uint64
-
-![image-20211112150139424](img\redis\96.png)
-
-如果 set 里存储的是字符串，那么 sadd 立即升级为 hashtable 结构
-
-```java
-Aliyun2G:0>sadd skey 1
-"1"
-Aliyun2G:0>object encoding skey
-"intset"
-Aliyun2G:0>sadd skey s
-"1"
-Aliyun2G:0>object encoding skey
-"hashtable"
-```
-
 ### 存储界限
 
 当集合对象的元素不断增加，或者某个 value 值过大，这种小对象存储也会被升级为标准结构。Redis 规定在小对象存储结构的限制条件如下：
 
 - `hash-max-zipmap-entries 512` # hash 的元素个数超过 512 就必须用标准结构存储
+
 - `hash-max-zipmap-value 64` # hash 的任意元素的 key/value 的长度超过 64 就必须用标准结构存储
+
 - `list-max-ziplist-entries 512` # list 的元素个数超过 512 就必须用标准结构存储
+
 - `list-max-ziplist-value 64` # list 的任意元素的长度超过 64 就必须用标准结构存储
+
+  > 上述两个，3.0版本有`list-max-ziplist-entries`和`list-max-ziplist-value`选项，表示在ziplist和linkedlist之间的转换，后面版本为`list-max-ziplist-size`和`list-compress-depth`选项
+
 - `zset-max-ziplist-entries 128` # zset 的元素个数超过 128 就必须用标准结构存储
+
 - `zset-max-ziplist-value 64` # zset 的任意元素的长度超过 64 就必须用标准结构存储
+
 - `set-max-intset-entries 512` # set 的整数元素个数超过 512 就必须用标准结构存储
 
 ### 内存回收
@@ -2485,26 +2451,7 @@ Redis 并不总是可以将空闲内存立即归还给操作系统
 
 Redis 虽然无法保证立即回收已经删除的 key 的内存，但是它会重用那些尚未回收的空闲内存。这就好比电影院里虽然人走了，但是座位还在，下一波观众来了，直接坐就行。而操作系统回收内存就好比把座位都给搬走了
 
-## String
-
-Redis 的字符串叫着「SDS」，也就是 Simple Dynamic String。它的结构是一个带长度信息的字节数组，支持append操作
-
-```c
-struct SDS<T> {
-    T capacity; // 数组容量
-    T len; // 数组长度
-    byte flags; // 特殊标识位，不理睬它
-    byte[] content; // 数组内容
-}
-```
-
-上面的 SDS 结构使用了范型 T，为什么不直接用 int 呢，这是因为当字符串比较短时，len 和 capacity 可以使用 byte 和 short 来表示，Redis 为了对内存做极致的优化，不同长度的字符串使用不同的结构体来表示
-
-Redis 规定字符串的长度不得超过 512M 字节。创建字符串时 len 和 capacity 一样长，不会多分配冗余空间
-
-> 因为绝大多数场景下我们不会使用 append 操作来修改字符串
-
-### embstr vs raw
+## embstr vs raw
 
 Redis 的字符串有两种存储方式，在长度特别短时，使用 emb 形式存储 (embeded)，当长度超过 44 时，使用 raw 形式存储
 
@@ -2527,6 +2474,26 @@ struct RedisObject {
 - 为了记录对象的 LRU 信息，使用了 24 个 bit 来记录 LRU 信息
 - 每个对象都有个引用计数，当引用计数为零时，对象就会被销毁，内存被回收
 - ptr 指针将指向对象内容 (body) 的具体存储位置。这样一个 RedisObject 对象头需要占据 16 字节的存储空间
+
+#### SDS
+
+具体存放字符串内容的结构叫「SDS」，也就是 Simple Dynamic String。它的结构是一个带长度信息的字节数组，支持append操作
+
+```c
+struct SDS<T> {
+    T capacity; // 数组容量
+    T len; // 数组长度
+    byte flags; // 特殊标识位，不理睬它
+    byte[] content; // 数组内容
+}
+```
+
+上面的 SDS 结构使用了范型 T，为什么不直接用 int 呢，这是因为当字符串比较短时，len 和 capacity 可以使用 byte 和 short 来表示，Redis 为了对内存做极致的优化，不同长度的字符串使用不同的结构体来表示
+
+- Redis 规定字符串的长度不得超过 512M 字节
+- 创建字符串时 len 和 capacity 一样长，不会多分配冗余空间
+
+> 因为绝大多数场景下我们不会使用 append 操作来修改字符串
 
 #### 为什么阈值为44字节
 
@@ -2558,7 +2525,7 @@ struct SDS {
 
 字符串在长度小于 1M 之前，扩容空间采用加倍策略，也就是保留 100% 的冗余空间。当长度超过 1M 之后，为了避免加倍后的冗余空间过大而导致浪费，每次扩容只会多分配 1M 大小的冗余空间
 
-## 字典dict
+## dict（hashtable）
 
 ### 概述
 
@@ -2598,7 +2565,7 @@ struct dict {
 }
 // hashtable结构
 struct dictht {
-    dictEntry** table; // 二维
+    dictEntry** table; // 一维数组
     long size; // 第一维数组的长度
     long used; // hash 表中的元素个数
     // ...
@@ -2661,11 +2628,266 @@ func get(key) {
 
 当 hash 表因为元素的逐渐删除变得越来越稀疏时，Redis 会对 hash 表进行缩容来减少hash 表的第一维数组空间占用。缩容的条件是元素个数低于数组长度的 10%。缩容不会考虑 Redis 是否正在做 bgsave（不需要申请额外内存，因此不会产生很多冗余内存，再多也不可能超过原数组内存大小）
 
-## Set
+## intset
 
-Redis 里面 set 的结构底层实现也是字典，只不过所有的 value 都是 NULL，其它的特性和字典一模一样
+Redis 的 intset 是一个紧凑的整数数组结构，它用于存放元素都是整数的并且元素个数较少的 set 集合
 
+```c
+struct intset<T> {
+    int32 encoding; // 决定整数位宽是 16 位、32 位还是 64 位
+    int32 length; // 元素个数
+    int<T> contents; // 整数数组，可以是 16 位、32 位和 64 位 
+}
+```
 
+如果整数可以用 uint16 表示，那么 intset 的元素就是 16 位的数组，如果新加入的整数超过了 uint16 的表示范围，那么就使用 uint32 表示，如果新加入的元素超过了 uint32 的表示范围，那么就使用 uint64 表示，Redis 支持 set 集合动态从 uint16 升级到 uint32，再升级到 uint64
+
+![image-20211112150139424](img\redis\96.png)
+
+如果 set 里存储的是字符串，那么 sadd 立即升级为 hashtable 结构
+
+```java
+Aliyun2G:0>sadd skey 1
+"1"
+Aliyun2G:0>object encoding skey
+"intset"
+Aliyun2G:0>sadd skey s
+"1"
+Aliyun2G:0>object encoding skey
+"hashtable"
+```
+
+## ziplist
+
+### 概述
+
+Redis 为了节约内存空间使用，zset 和 hash 容器对象在元素个数较少的时候，采用压缩列表 (ziplist) 进行存储。压缩列表是一块连续的内存空间，元素之间紧挨着存储，没有任何冗余空隙
+
+Redis 的 ziplist 是一个紧凑的字节数组结构
+
+![image-20211112145818127](img\redis\98.gif)
+
+- 如果它存储的是 hash 结构，那么 field 和 value 会作为两个 entry 相邻存在一起
+- 如果它存储的是 zset，那么 value 和 score 会作为两个 entry 相邻存在一起
+
+```sh
+Aliyun2G:0>hset hkey f1 v1
+"1"
+Aliyun2G:0>object encoding hkey
+"ziplist"
+
+Aliyun2G:0>zadd zkey 99 xiaoming
+"1"
+Aliyun2G:0>object encoding zkey
+"ziplist"
+```
+
+### 内部结构
+
+```c
+struct ziplist<T> {
+    int32 zlbytes; // 整个压缩列表占用字节数
+    int32 zltail_offset; // 最后一个元素距离压缩列表起始位置的偏移量，用于快速定位到最后一个节点
+    int16 zllength; // 元素个数
+    T[] entries; // 元素内容列表，挨个挨个紧凑存储
+    int8 zlend; // 标志压缩列表的结束，值恒为 0xFF
+}
+
+struct entry {
+    // 前一个 entry 的字节长度，当压缩列表倒着遍历时，需要通过这个字段来快速定位到下一个元素的位置
+    // 当字符串长度小于254(0xFE) 时，使用一个字节表示；
+    /** 如果达到或超出 254(0xFE) 那就使用 5 个字节来表示
+    	第一个字节是 0xFE(254)，剩余四个字节表示字符串长度
+    	**/
+    int<var> prevlen; 
+    int<var> encoding; // 元素类型编码
+    optional byte[] content; // 元素内容
+}
+```
+
+encoding 字段存储了元素内容的编码类型信息，ziplist 通过这个字段来决定后面的content 内容的形式
+
+Redis 为了节约存储空间，对 encoding 字段进行了相当复杂的设计。Redis 通过这个字段的前缀位来识别具体存储的数据形式
+
+1. **00**xxxxxx 最大长度位 63 的**短字符串**，后面的 6 个位存储字符串的位数，剩余的字节就是字符串的内容
+2. **01**xxxxxx xxxxxxxx **中等长度的字符串**，后面 14 个位来表示字符串的长度，剩余的字节就是字符串的内容。
+3. **10**000000 aaaaaaaa bbbbbbbb cccccccc dddddddd 特大字符串，需要使用额外 4 个字节来表示长度。第一个字节前缀是 10，剩余 6 位没有使用，统一置为零。后面跟着字符串内容。不过这样的大字符串是没有机会使用的，压缩列表通常只是用来存储小数据的
+4. **11**
+   1. 11000000 表示 int16，后跟两个字节表示整数
+   2. 11010000 表示 int32，后跟四个字节表示整数。
+   3. 11100000 表示 int64，后跟八个字节表示整数。
+   4. 11110000 表示 int24，后跟三个字节表示整数。
+   5. 11111110 表示 int8，后跟一个字节表示整数。
+   6. 11111111 表示 ziplist 的结束，也就是 zlend 的值 0xFF。
+   7. 1111xxxx 表示极小整数，xxxx 的范围只能是 (0001~1101), 也就是 1~13，因为0000、1110、1111 都被占用了。读取到的 value 需要将 xxxx 减 1，也就是整数 0~12 就是最终的 value
+
+注意到 content 字段在结构体中定义为 optional 类型，表示这个字段是可选的，对于很小的整数而言，它的内容已经内联到 encoding 字段的尾部了
+
+### 增加元素
+
+因为 ziplist 都是紧凑存储，没有冗余空间 (对比一下 Redis 的字符串结构)。意味着插入一个新的元素就需要调用 realloc 扩展内存。取决于内存分配器算法和当前的 ziplist 内存大小，realloc 可能会重新分配新的内存空间，并将之前的内容一次性**拷贝**到新的地址，也可能在原有的地址上进行**扩展**，这时就不需要进行旧内容的内存拷贝
+
+如果 ziplist 占据内存太大，重新分配内存和拷贝内存就会有很大的消耗。所以 ziplist 不适合存储大型字符串，存储的元素也不宜过多
+
+### 级联更新
+
+每个 entry 都会有一个 prevlen 字段存储前一个 entry 的长度。如果内容小于254 字节，prevlen 用 1 字节存储，否则就是 5 字节。这意味着如果某个 entry 经过了修改操作从 253 字节变成了 254 字节，那么它的下一个 entry 的 prevlen 字段就要更新，从 1 个字节扩展到 5 个字节；如果这个 entry 的长度本来也是 253 字节，那么后面 entry 的prevlen 字段还得继续更新
+
+如果 ziplist 里面每个 entry 恰好都存储了 253 字节的内容，那么第一个 entry 内容的修改就会导致后续所有 entry 的级联更新，这就是一个比较耗费计算资源的操作
+
+## quicklist
+
+Redis 早期版本存储 list 列表数据结构使用的是压缩列表 ziplist 和普通的双向链表linkedlist，也就是元素少时用 ziplist，元素多时用 linkedlist
+
+考虑到链表的附加空间相对太高，每个链表节点的prev 和 next 指针就要占去 16 个字节 (64bit 系统的指针是 8 个字节)，另外每个节点的内存都是单独分配，会加剧内存的碎片化，影响内存管理效率。后续版本对列表数据结构进行了改造，使用 quicklist 代替了 ziplist 和 linkedlist
+
+### 概述
+
+quicklist 是 ziplist 和 linkedlist 的混合体，它将 linkedlist 按段切分，每一段使用 ziplist 来紧凑存储，多个 ziplist 之间使用双向指针串接起来
+
+![image-20211117152340204](img\redis\107.png)
+
+为了进一步节约空间，Redis 还会对ziplist 进行压缩存储，使用 LZF 算法压缩，可以选择压缩深度；quicklist 默认的压缩深度是 0，也就是不压缩。压缩的实际深度由配置参数 list-compress-depth 决定。为了支持快速的 push/pop 操作，quicklist 的首尾两个 ziplist 不压缩，此时深度就是 1。如果深度为 2，就表示 quicklist 的首尾第一个 ziplist 以及首尾第二个 ziplist 都不压缩
+
+quicklist 内部默认单个 ziplist 长度为 8k 字节，超出了这个字节数，就会新起一个ziplist。ziplist 的长度由配置参数 list-max-ziplist-size 决定
+
+> 取正值时表示quicklist节点ziplist包含的数据项。取负值表示按照占用字节来限定quicklist节点ziplist的长度
+>      -5: 每个quicklist节点上的ziplist大小不能超过64 Kb
+>      -4: 每个quicklist节点上的ziplist大小不能超过32 Kb
+>      -3: 每个quicklist节点上的ziplist大小不能超过16 Kb
+>      -2: 每个quicklist节点上的ziplist大小不能超过8 Kb（默认值）
+>      -1: 每个quicklist节点上的ziplist大小不能超过4 Kb
+
+## skiplist
+
+Redis 的 zset 是一个复合结构，一方面它需要一个 hash 结构来存储 value 和 score 的对应关系，另一方面需要提供按照 score 来排序的功能，还需要能够指定 score 的范围来获取 value 列表的功能，这就需要另外一个结构「跳跃列表」
+
+### 内部结构
+
+zset 的内部实现是一个 hash 字典加一个跳跃列表 (skiplist)
+
+字典的键保存元素的值（value/member），字典的值则保存元素的分值（score）；跳跃表节点的 object 属性保存元素的成员，跳跃表节点的 score 属性保存元素的分值。
+
+这两种数据结构会**通过指针来共享相同元素的成员和分值**，所以不会产生重复成员和分值，造成内存的浪费
+
+> **说明**：其实有序集合单独使用字典或跳跃表其中一种数据结构都可以实现，但是这里使用两种数据结构组合起来，原因是假如我们单独使用 字典，虽然能以 O(1) 的时间复杂度查找成员的分值，但是因为字典是以无序的方式来保存集合元素，所以**每次进行范围操作的时候都要进行排序**；假如我们单独使用跳跃表来实现，虽然能执行范围操作，**但是查找操作有 O(1)的复杂度变为了O(logN)**。因此**Redis使用了两种数据结构来共同实现有序集合**
+
+![image-20211117153714505](img\redis\108.png)
+
+Redis 的跳跃表共有 64 层。每一个 kv 块对应的结构如下面的代码中的 zslnode 结构，kv header 也是这个结构，只不过 value 字段是 null 值——无效的，score 是Double.MIN_VALUE，用来垫底的
+
+```c
+struct zslnode {
+    string value;
+    double score;
+    zslnode*[] forwards; // 多层连接指针
+    zslnode* backward; // 回溯指针
+}
+struct zsl {
+    zslnode* header; // 跳跃列表头指针
+    int maxLevel; // 跳跃列表当前的最高层
+    map<string, zslnode*> ht; // hash 结构的所有键值对
+}
+```
+
+对于每一个新插入的节点，都需要调用一个随机算法给它分配一个合理的层数。传统上的skiplist是 50% 的 Level1，25% 的 Level2，12.5% 的 Level3，一直到最顶层 2^-63，因为这里每一层的晋升概率是 50%
+
+不过 Redis 标准源码中的晋升概率只有 25%，所以官方的跳跃列表更加的扁平化，层高相对较低，在单个层上需要遍历的节点数量会稍多一点。跳跃列表会记录一下当前的最高层数 maxLevel，遍历时从这个 maxLevel 开始
+
+> 在一个极端的情况下，zset 中所有的 score 值都是一样的，zset 的查找性能会退化为O(n) 么？Redis 作者自然考虑到了这一点，所以 zset 的排序元素不只看 score 值，如果score 值相同还需要再比较 value 值
+
+### 更新
+
+当我们调用 zadd 方法时，如果对应的 value 不存在，那就是插入过程。如果这个value 已经存在了，只是调整一下 score 的值，那就需要走一个更新的流程。假设这个新的score 值不会带来排序位置上的改变，那么就不需要调整位置，直接修改元素的 score 值就可以了。但是如果排序位置改变了，那就要调整位置
+
+一个简单的策略就是先删除这个元素，再插入这个元素，需要经过两次路径搜索。Redis 就是这么干的。 不过 Redis 遇到 score 值改变了就直接删除再插入，不会去判断位置是否需要调整
+
+### rank
+
+zset 可以获取元素的排名 rank。那这个 rank 是如何算出来的？如果仅仅使用上面的结构，rank 是不能算出来的
+
+Redis 在 skiplist 的 forward 指针上进行了优化，给每一个 forward 指针都增加了 span 属性，span 是「跨度」的意思，表示从前一个节点沿着当前层的 forward 指针跳到当前这个节点中间会跳过多少个节点。Redis 在插入删除操作时会小心翼翼地更新 span 值的大小。要计算一个元素的排名时，只需要将「搜索路径」上的经过的所有节点的跨度 span 值进行叠加就可以算出元素的最终 rank 值
+
+## listpack
+
+Redis 5.0 又引入了一个新的数据结构 listpack，它是对 ziplist 结构的改进，在存储空间上会更加节省，而且结构上也比 ziplist 要精简。它的整体形式和 ziplist 还是比较接近的
+
+```c
+struct listpack<T> {
+    int32 total_bytes; // 占用的总字节数
+    int16 size; // 元素个数
+    T[] entries; // 紧凑排列的元素列表
+    int8 end; // 同 zlend 一样，恒为 0xFF
+}
+```
+
+![image-20211117161137939](img\redis\109.png)
+
+listpack 跟 ziplist 的结构几乎一摸一样，只是少了一个 zltail_offset 字段。ziplist 通过这个字段来定位出最后一个元素的位置，用于逆序遍历。不过 listpack 可以通过其它方式来定位出最后一个元素的位置，所以 zltail_offset 字段就省掉了
+
+```c
+struct lpentry {
+    int<var> encoding;
+    optional byte[] content;
+    int<var> length;
+}
+```
+
+元素的结构和 ziplist 的元素结构也很类似，都是包含三个字段。不同的是长度字段放在了元素的尾部，而且存储的不是上一个元素的长度，是当前元素的长度。正是因为长度放在了尾部，所以可以省去了 zltail_offset 字段来标记最后一个元素的位置，这个位置可以通过total_bytes 字段和最后一个元素的长度字段计算出来
+
+长度字段使用 varint 进行编码，不同于 skiplist 元素长度的编码为 1 个字节或者 5 个字节，listpack 元素长度的编码可以是 1、2、3、4、5 个字节。同 UTF8 编码一样，它通过字节的最高为是否为 1 来决定编码的长度
+
+listpack 的设计彻底消灭了 ziplist 存在的级联更新行为，元素与元素之间完全独立，不会因为一个元素的长度变长就导致后续的元素内容会受到影响
+
+> listpack 的设计的目的是用来取代 ziplist，不过当下还没有做好替换 ziplist 的准备，因为有很多兼容性的问题需要考虑，ziplist 在 Redis 数据结构中使用太广泛了，替换起来复杂度会非常之高。它目前只使用在了新增加的 Stream 数据结构中
+
+## Rax
+
+Rax 是 Redis 内部比较特殊的一个数据结构，它是一个有序字典树 (基数树 Radix Tree)，按照 key 的字典序排列，支持快速地定位、插入和删除操作。Redis 五大基础数据结构里面，能作为字典使用的有 hash 和 zset。hash 不具备排序功能，zset 则是按照 score 进行排序的。rax 跟 zset 的不同在于它是按照 key 进行排序的
+
+Rax 被用在 Redis Stream 结构里面用于存储消息队列，在 Stream 里面消息 ID 的前缀是时间戳 + 序号，这样的消息可以理解为时间序列消息。使用 Rax 结构进行存储就可以快速地根据消息 ID 定位到具体的消息，然后继续遍历指定消息之后的所有消息
+
+## 总结
+
+### 表格
+
+| type   | encoding                                                     |
+| ------ | ------------------------------------------------------------ |
+| string | int; embstr → (字符长度>44) →raw                             |
+| list   | quicklist                                                    |
+| set    | intset → (sadd一个字符串或整数元素个数超过 512) → hashtable  |
+| zset   | ziplist → (总元素个数>128或单个元素的key/value长度>64) → skiplist |
+| hash   | ziplist → (总元素个数>512或单个元素的key/value长度>64) → hashtable |
+
+### 图示
+
+#### 全局
+
+![image-20211118095747087](img\redis\110.png)
+
+#### string
+
+![image-20211118110216812](img\redis\111.png)
+
+#### list
+
+![image-20211118105725016](img\redis\112.png)
+
+#### hash
+
+![image-20211118105402996](img\redis\113.png)
+
+#### set
+
+![image-20211118110654604](img\redis\114.png)
+
+#### zset
+
+![image-20211118111044808](img\redis\115.png)
+
+**skiplist + hashtable**
+
+![image-20211118111337883](img\redis\116.png)
 
 # Redis应用
 
@@ -3695,3 +3917,6 @@ public class TokenBucketDemo {
 
 # 参考
 
+[]
+
+[2] [https://www.jianshu.com/p/e5a516831ac2](https://www.jianshu.com/p/e5a516831ac2)
