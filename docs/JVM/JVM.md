@@ -2513,6 +2513,147 @@ Code属性是Class文件中最重要的一个属性，如果把一个Java程序�
 
 ![image-20211115194115939](imgs\69.png)
 
+# 字节码指令
+
+## 概述
+
+字节码：一个字节长度，形式为`opcode operand`，如`bipush 30`，构成字节码指令集的基本单位，JVM解释器解释执行的基本对象
+
+### 特点
+
+- 大多数指令都不包含操作数，只有一个操作码，指令参数都存放在操作数栈中
+
+- 限制了Java虚 拟机操作码的长度为一个字节（即0～255），所以指令集的操作码总数不能够超过256条；
+
+- Class文件格式放弃了编译后代码的操作数长度对齐，这就意味着虚拟机在处理那些超过一个字节的数据时，不得不在运行时从字节中重建出具体数据的结构
+
+  > 譬如要将一个16位长度的无符号整数使用两个无符号字节存储起来（假设将它们命名为byte1和byte2），那它们的值应该是这样的： (byte1 << 8) | byte2 
+  >
+  > 这种操作在某种程度上会导致解释执行字节码时将损失一些性能，但这样做的优势也同样明显： 
+  >
+  > 放弃了操作数长度对齐，就意味着可以省略掉大量的填充和间隔符号；用一个字节来代表操作码，也是为了尽可能获得短小精干的编译代码
+
+如果不考虑异常处理的话，那Java虚拟机的解释器可以使用下面这段伪代码作为最基本的执行模型来理解，这个执行模型虽然很简单，但依然可以有效正确地工作：
+
+```java
+do {
+    自动计算PC寄存器的值加1; 
+    根据PC寄存器指示的位置，从字节码流中取出操作码; 
+    if (字节码存在操作数) 从字节码流中取出操作数; 执行操作码所定义的操作; 
+} while (字节码流长度 > 0);
+```
+
+## 字节码与数据类型
+
+在Java虚拟机的指令集中，大多数指令都包含其操作所对应的数据类型信息。举个例子，iload指令用于从局部变量表中加载int型的数据到操作数栈中，而fload指令加载的则是float类型的数据。这两条指令的操作在虚拟机内部可能会是由同一段代码来实现的，但在Class文件中它们必须拥有各自独立的操作码
+
+对于大部分与数据类型相关的字节码指令，它们的操作码助记符中都有特殊字符来表明专门为哪种数据类型服务：
+
+- i代表对int类型的数据操作
+- l代表long
+- s代表short
+- b代表byte
+- c代表char
+- f代表float
+- d代表double
+- a代表reference
+- 有一些指令的助记符中没有明确指明操作类型的字母，例如arraylength指令，它没有代表数据类型的特殊字符，但操作数永远只能是一个数组类型的对象
+- 还有另外一些指令，例如无条件跳转指令goto则是与数据类型无关的指令
+
+并非每种数据类型和每一种操作都有对应的指令，大部分指令都没有支持整数类型byte、char和short，甚至没有任何指令支持boolean类型
+
+> 编译器会在编译期或运行期将byte和short类型的数据带符号扩展（Sign-Extend）为相应的int类型数据，将boolean和char类型数据零位扩展（Zero-Extend）为相应的int类型数据。与之类似，在处理boolean、byte、short和char类型的数组时，也会转换为使用对应的int类型的字节码指令来处理。因此，大多数对于boolean、byte、short和char类型数据的操作，实际上都是使用相应的对int类型
+
+## 指令集
+
+### 加载和存储
+
+加载和存储指令用于将数据在栈帧中的局部变量表和操作数栈之间来回传输，这类指令包括：
+
+- 将一个局部变量加载到操作栈：iload、iload\_\<n>、lload、lload\_\<n>、fload、fload\_\<n>、dload、dload\_\<n>、aload、aload\_\<n>
+- 将一个数值从操作数栈存储到局部变量表：istore、istore\_\<n>、lstore、lstore\_\<n>、fstore、fstore\_\<n>、dstore、dstore\_\<n>、astore、astore\_\<n> 
+- 将一个常量加载到操作数栈：bipush、sipush、ldc、ldc_w、ldc2_w、aconst_null、iconst_m1、 iconst\_\<i>、lconst\_\<l>、fconst\_\<f>、dconst_\<d> 
+- 扩充局部变量表的访问索引的指令：wide
+
+iload\_\<n>这些指令助记符实际上代表了一组指令（例如iload_\<n>，它代表了iload_0、iload_1、iload_2和iload_3这几条指令）。这几组指令都是某个带有一个操作数的通用指令（例如iload）的特殊形式，将操作数隐含在指令中，代表在局部变量表的第几个槽
+
+### 运算
+
+算术指令用于对两个操作数栈上的值进行某种特定运算，并把结果重新存入到操作栈顶
+
+不存在直接支持byte、short、char和boolean类型的算术指令，对于上述几种数据的运算，应使用操作int类型的指令代替
+
+- 加法指令：iadd、ladd、fadd、dadd 
+- 减法指令：isub、lsub、fsub、dsub 
+- 乘法指令：imul、lmul、fmul、dmul 
+- 除法指令：idiv、ldiv、fdiv、ddiv 
+- 求余指令：irem、lrem、frem、drem 
+- 取反指令：ineg、lneg、fneg、dneg 
+- 位移指令：ishl、ishr、iushr、lshl、lshr、lushr 
+- 按位或指令：ior、lor 
+- 按位与指令：iand、land 
+- 按位异或指令：ixor、lxor 
+- 局部变量自增指令：iinc 
+- 比较指令：dcmpg、dcmpl、fcmpg、fcmpl、lcmp
+
+### 类型转换
+
+类型转换指令可以将两种不同的数值类型相互转换，这些转换操作一般用于实现用户代码中的显式类型转换操作，或者用来处理本节开篇所提到的字节码指令集中数据类型相关指令无法与数据类型一一对应的问题
+
+JVM直接支持（即转换时无须显式的转换指令）以下数值类型的宽化类型转换： 
+
+- int类型到long、float或者double类型
+- long类型到float、double类型 
+- float类型到double类型 
+
+处理窄化类型转换（Narrowing Numeric Conversion）时，就必须显式地使用转换指令来完成，这些转换指令包括i2b、i2c、i2s、l2i、f2i、f2l、d2i、d2l和d2f。窄化类型转换可能会导致转换结果产生不同的正负号、不同的数量级的情况，转换过程很可能会导致数值的精度丢失
+
+### 对象创建和访问
+
+- 创建类实例的指令：new
+- 创建数组的指令：newarray、anewarray、multianewarray
+- 访问类字段（static字段，或者称为类变量）和实例字段（非static字段，或者称为实例变量）的指令：getfield、putfield、getstatic、putstatic
+- 把一个数组元素加载到操作数栈的指令：baload、caload、saload、iaload、laload、faload、daload、aaload
+- 将一个操作数栈的值储存到数组元素中的指令：bastore、castore、sastore、iastore、fastore、dastore、aastore
+- 取数组长度的指令：arraylength
+- 检查类实例类型的指令：instanceof、checkcast
+
+### 操作数栈管理
+
+如同操作一个普通数据结构中的堆栈那样，Java虚拟机提供了一些用于直接操作操作数栈的指令，包括： 
+
+- 将操作数栈的栈顶一个或两个元素出栈：pop、pop2
+- 复制栈顶一个或两个数值并将复制值或双份的复制值重新压入栈顶：dup、dup2、dup_x1、dup2_x1、dup_x2、dup2_x2
+- 将栈最顶端的两个数值互换：swap
+
+### 控制转移
+
+有条件或无条件地从指定位置指令（而不是控制转移指令）的下一条指令继续执行程序，从概念模型上理解，可以认为控制指令就是在有条件或无条件地修改PC寄存器的值。控制转移指令包括：
+
+- 条件分支：ifeq、iflt、ifle、ifne、ifgt、ifge、ifnull、ifnonnull、if_icmpeq、if_icmpne、if_icmplt、if_icmpgt、if_icmple、if_icmpge、if_acmpeq和if_acmpne
+- 复合条件分支：tableswitch、lookupswitch
+- 无条件分支：goto、goto_w、jsr、jsr_w、ret
+
+### 方法调用和返回
+
+- invokevirtual指令：用于调用对象的实例方法，根据对象的实际类型进行分派（虚方法分派） 
+
+- invokeinterface指令：用于调用接口方法，它会在运行时搜索一个实现了这个接口方法的对象，找出适合的方法进行调用
+
+- invokespecial指令：用于调用一些需要特殊处理的实例方法，包括实例初始化方法、私有方法和父类方法
+
+- invokestatic指令：用于调用类静态方法（static方法）
+
+- invokedynamic指令：用于在运行时动态解析出调用点限定符所引用的方法
+
+  > 前面四条调用指令的分派逻辑都固化在Java虚拟机内部，用户无法改变，而invokedynamic指令的分派逻辑是由用户所设定的引导方法决定的
+
+方法返回指令是根据返回值的类型区分的，包括ireturn（当返回值是boolean、byte、char、short和int类型时使用）、lreturn、freturn、dreturn和areturn，另外还有一条return指令供声明为void的方法、实例初始化方法、类和接口的类初始化方法使用
+
+### 异常
+
+在Java程序中显式throw语句都由athrow指令来实现，处理异常（catch语句）不是由字节码指令来实现的（很久之前曾经使用jsr、ret指令来实现，现在已经不用了），而是采用异常表来完成
+
 # 参考
 
 [1] [尚硅谷JVM](https://www.bilibili.com/video/BV1PJ411n7xZ?p=56&spm_id_from=pageDriver)
