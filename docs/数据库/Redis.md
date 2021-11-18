@@ -985,6 +985,10 @@ RDB适用于备份，因为AOF不断变化不好实现主从备份
 
 ![image-20211111162136672](img\redis\97.gif)
 
+## Redis总无法保证100%数据不丢失
+
+[https://blog.csdn.net/qq_22421145/article/details/105414412](https://blog.csdn.net/qq_22421145/article/details/105414412)
+
 # 事务
 
 ## 事务的本质
@@ -3917,6 +3921,6 @@ public class TokenBucketDemo {
 
 # 参考
 
-[]
-
-[2] [https://www.jianshu.com/p/e5a516831ac2](https://www.jianshu.com/p/e5a516831ac2)
+- [1] 《Redis深度历险：核心原理和应用实践》——钱文品
+- [2] [https://blog.csdn.net/qq_22421145/article/details/105414412——young_ao](https://blog.csdn.net/qq_22421145/article/details/105414412)
+- [3] [https://www.jianshu.com/p/e5a516831ac2](https://www.jianshu.com/p/e5a516831ac2)

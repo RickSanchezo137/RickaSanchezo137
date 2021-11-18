@@ -28,5 +28,4 @@
 
 ## 数据库
 
-- [《MySQL实战45讲》读书笔记](/数据库/MySQL.md)
 - [Redis](/数据库/Redis.md)
