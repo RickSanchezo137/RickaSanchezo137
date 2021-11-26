@@ -3950,6 +3950,20 @@ mysql> insert into t values(30,10,30);
 
 这里，我再啰嗦下，你会发现我在文章中，每次加锁都会说明是加在“哪个索引上”的。因为，**锁就是加在索引上的，这是InnoDB的一个基础设定**，需要你在分析问题的时候要一直记得
 
+# 小总结
+
+## 锁竞争
+
+**锁是加在索引上的**
+
+- update：竞争行锁的写锁，扫描到了的地方也会加相应锁
+- select for update/in share mode：扫描到了的地方加相应锁
+- insert：间隙锁之间加锁互不冲突，间隙锁只与insert这个行为产生冲突
+
+## in share mode和for update
+
+- 针对二级索引，如果覆盖索引，in share mode只会在二级索引上加锁，而for update会给主键加锁
+
 # 参考
 
 - 《Mysql实战45讲》——丁奇
