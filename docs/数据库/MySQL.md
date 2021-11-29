@@ -4496,7 +4496,7 @@ mysql> insert into t values(10,10, now());
 
 ![img](img\138.png)
 
-可以看到，MySQL用的居然是statement格式。你一定会奇怪，如果这个binlog过了1分钟才传给备库的话，那主备的数据不就不一致了吗？
+可以看到，MySQL用的居然是statement格式，你一定会奇怪，如果这个binlog过了1分钟才传给备库的话，那主备的数据不就不一致了吗？
 
 接下来，我们再用mysqlbinlog工具来看看：
 
