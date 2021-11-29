@@ -227,3 +227,68 @@ change buffer在进行修改操作时，首先判断所要的数据页在不在�
 > 2. 发现插入记录后数据页可用空间会降低到1/32以下
 > 3. master thread每个1或10秒进行merge
 
+### double write
+
+[https://www.cnblogs.com/nandi001/p/11662992.html](https://www.cnblogs.com/nandi001/p/11662992.html)
+
+#### partial page write
+
+将内存中的脏页进行刷脏时，可能会出现这样的问题：数据库的数据页是16KB，而操作系统一般是2KB或者4KB，将某一个16KB的脏页刷盘时，可能刚刷了一部分（2或4KB的倍数），数据库系统就挂了
+
+再次重启时，数据库会对数据页进行校验，检查page的checksum，checksum就是page的最后事务号，发现无法恢复，这一页就“坏了”，永远丢失了
+
+> redo log是物理日志，记录的是某一完整的数据页，不同偏移量上面发生的变更记录，并不记录整个页的情况*（这要记录得占用多大呀）*，对于不完整的数据页自然是没有办法恢复的
+
+这就是partial page write，即部分写失效问题
+
+#### 解决
+
+可用double write来解决，在磁盘的ibdbata文件中划出2M连续的空间，称为共享表空间
+
+![img](img\jsnm\3.png)
+
+1. 每次产生脏页时，首先自然是写redo log，之后在刷脏时，会首先通过memcpy将脏页复制到double write buffer，接着迅速分两次，每次1MB进行fsync写到磁盘上的共享表空间。这个过程是针对连续内存的顺序写，因此比较快
+
+2. 写完double write后，再将double write buffer中的脏页写到表空间的数据页中，这个过程是离散写
+
+   如果这个过程发生了崩溃，恢复时：
+
+   1. 首先发现该页checksum不对劲，去共享表空间尝试恢复该脏页
+      1. 如果共享表空间也没有，说明刷盘这个行为没有发生，磁盘中没有坏数据页，直接根据原始数据和redo log恢复就可以了
+      2. 如果共享表空间有，说明是在刷盘阶段出现了问题，先根据共享表空间的副本恢复数据页完整性，再根据redo log恢复
+
+![img](img\jsnm\4.png)
+
+> 设置`skip_innodb_doublewrite`可取消该机制
+
+### 自适应哈希
+
+Auto Hash Index
+
+对于频繁访问且访问模式一致的二级索引页，InnoDB在判断哈希的收益较大时，会给该页建立一个哈希表，直接定位到数据页，而不需要再在索引树上面查找
+
+`set global innodb_adaptive_hash_index=off/on`
+
+缺陷：① 占用buffer pool；② 可能哈希冲突； ③ 无法排序；④ 只适用于等值查询；⑤ 无法人为管理
+
+默认开启，但一般不建议使用
+
+### 异步IO
+
+Asynchronous IO
+
+- sync IO：发出一个IO请求，停等到数据返回
+- AIO：可以发出多个请求，再等待IO操作完成
+
+IO merge：访问连续的页，合并成一个访问
+
+目前版本都是Native AIO，调用内核级别的AIO（除Mac OS，还是使用InnoDB自己的实现）
+
+### 刷新邻接页
+
+刷新某个脏页时，发现所在分区（extend）有其他脏页，则一起刷脏，可以将可能出现的多次IO合并成一次IO
+
+如果磁盘（比如固态硬盘）IOPS非常高，建议关闭该功能，因为可能将没那么脏的脏页刷脏，但它又很快重新变脏了
+
+`innodb_flush_neighbors`控制
+
