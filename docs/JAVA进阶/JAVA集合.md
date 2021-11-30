@@ -25,6 +25,31 @@
 private transient Object[] elementData;
 ```
 
+> 为什么要transient？
+>
+> ```java
+> private void writeObject(java.io.ObjectOutputStream s)
+>     throws java.io.IOException{
+>     // Write out element count, and any hidden stuff
+>     int expectedModCount = modCount;
+>     s.defaultWriteObject();
+> 
+>     // Write out size as capacity for behavioural compatibility with clone()
+>     s.writeInt(size);
+> 
+>     // Write out all elements in the proper order.
+>     for (int i=0; i<size; i++) {
+>         s.writeObject(elementData[i]);
+>     }
+> 
+>     if (modCount != expectedModCount) {
+>         throw new ConcurrentModificationException();
+>     }
+> }
+> ```
+>
+> 序列化时，首先调用默认的writeObject，接着遍历数组，只序列化存在元素的部分，这样可以加快序列化且减小序列化后体积
+
 **初始化**
 
 - ArrayList()：无参构造器底层创建长度为10的Object类型数组，this(10);
@@ -88,10 +113,8 @@ public ArrayList(int initialCapacity) {
                                            initialCapacity);
     }
 }
-```
 
-```java
-![3](D:\笔记\秋招\docs\JAVA进阶\imgs\JAVA集合\3.png)private static final Object[] EMPTY_ELEMENTDATA = {};
+private static final Object[] EMPTY_ELEMENTDATA = {};    
 ```
 
 **添加**
