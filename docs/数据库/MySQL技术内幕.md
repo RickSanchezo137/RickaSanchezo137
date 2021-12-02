@@ -8,14 +8,14 @@ MySQL是单进程多线程的架构
 
 > 配置文件：my.ini
 >
-> 可通过`mysql --help`查看`Default options are read from the following files in the given order:`
+> 可通过`mysql --help`或`mysql --help|findstr(win)/grep(linux) my.ini `查看`Default options are read from the following files in the given order:`
 >
 > 有多个配置文件，读取顺序为上述查看到的，后面会覆盖前面，也就是说不一样时以最后一个为准
 
 ## database和instance
 
 - database：物理操作系统文件或其他形式文件类型的集合。在MySQL数据库中，数据
-  库文件可以是fim、MYD、MYI、ibd 结尾的文件
+  库文件可以是frm、MYD、MYI、ibd 结尾的文件
 - 实例：MySQL数据库实例由后台线程以及一个共享内存区组成。共享内存可以被运行
   的后台线程所共享。需要牢记的是，数据库实例才是真正用于操作数据库文件的
 
@@ -45,6 +45,8 @@ MySQL是单进程多线程的架构
   使用得最多的一种方式
 - 命名管道和共享内存
 - UNIX套接字
+
+# 2. InnoDB
 
 ## InnoDB体系架构
 
@@ -291,4 +293,35 @@ IO merge：访问连续的页，合并成一个访问
 如果磁盘（比如固态硬盘）IOPS非常高，建议关闭该功能，因为可能将没那么脏的脏页刷脏，但它又很快重新变脏了
 
 `innodb_flush_neighbors`控制
+
+## InnoDB启动与关闭
+
+> 实际上是指mysql对InnoDB的处理过程
+
+根据`innodb_fast_shutdown`控制，默认为1
+
+- =0：需要完成所有的full purge（删除所有无用undo）、merge change buffer、刷脏。InnoDB升级时，必须先把这个设置为0
+- =1：刷脏
+- =2：不刷脏也不purge、merge，而是将所有日志都写入日志文件。下次启动时进行recovery机制（还有异常关闭数据库实例时，也会进行该操作，比如：kill进程、重启机器等，会回滚操作并记录错误日志）
+
+> 不能进行有效恢复时，比如数据页出现corruption，则数据库可能宕机（crash）并记录错误日志
+
+# 3. 文件
+
+[https://www.cnblogs.com/wy123/p/7102128.html](https://www.cnblogs.com/wy123/p/7102128.html)
+
+1. MySQL（server）创建并管理的数据库文件：
+   - .frm文件：存储数据表的框架结构，文件名与表名相同，每个表对应一个同名frm文件，与操作系统和存储引擎无关，即不管MySQL运行在何种操作系统上，使用何种存储引擎，都有这个文件
+2. MyISAM数据库表文件：
+   - .MYD文件：即MY Data，表数据文件
+   - .MYI文件：即MY Index，索引文件
+   - .log文件：日志文件
+
+3. InnoDB采用表空间（tablespace）来管理数据，存储表数据和索引，InnoDB数据库文件（即InnoDB文件集，ib-file set）：
+
+- ibdata1、ibdata2等：系统表空间文件，存储InnoDB系统信息和用户数据库表数据和索引，所有表共用
+- .ibd文件：单表表空间文件，每个表使用一个表空间文件（file per table），存放用户数据库表数据和索引
+- 日志文件： ib_logfile1、ib_logfile2
+
+# 4. 表
 
