@@ -150,13 +150,274 @@ telnet 127.0.0.1 6666
 
 # Java NIO
 
+## Java IO流程
+
+> [https://mp.weixin.qq.com/s?__biz=MzkzNTEwOTAxMA==&mid=2247491660&idx=1&sn=a7d79ec4cc3f40e7b9a9018436a7377a&chksm=c2b1a8b1f5c621a7268ca298598a15c4ac575790628651e5651925b5efd96ebc0046796ef5b1&token=570732653&lang=zh_CN#rd](https://mp.weixin.qq.com/s?__biz=MzkzNTEwOTAxMA==&mid=2247491660&idx=1&sn=a7d79ec4cc3f40e7b9a9018436a7377a&chksm=c2b1a8b1f5c621a7268ca298598a15c4ac575790628651e5651925b5efd96ebc0046796ef5b1&token=570732653&lang=zh_CN#rd)
+
+### 传统IO
+
+![image-20211209004227281](imgs\netty\10.png)
+
+**读写流程**
+
+- 写（棕色线条）：
+
+  用户向Java heap的Buffer对象写数据并调用相关api 
+
+  → cpu将数据拷贝到堆外内存的DirectBuffer 
+
+  → cpu调用JNI的pwrite0/write0方法向内核空间写（用户态切换到内核态） 
+
+  → DMA控制器将内核缓冲区的数据拷贝到硬盘/显卡（切换回用户态）
+
+- 读（绿色线条）：
+
+  用户调用read相关api 
+
+  → cpu调用到底层JNI的pread0/read方法（用户态切换到内核态） 
+
+  → DMA将数据从硬盘/显卡拷贝到内核缓冲区，并读到DirectBuffer（内核态切换到用户态） 
+
+  → 读进Java heap的Buffer对象，返回数据
+
+**源码验证**
+
+以`FileChannel.write(ByteBuffer)`的关键语句为例：
+
+👉首先进入实例方法，`FileChannelImpl.write`
+
+```java
+public int write(ByteBuffer src) throws IOException {
+    // ......（省略了其他部分）
+            do {
+                // 🔥关键语句
+                n = IOUtil.write(fd, src, -1, direct, alignment, nd);
+            } while ((n == IOStatus.INTERRUPTED) && isOpen());
+            // ......
+}
+```
+
+👉进入`IOUtil.write`
+
+```java
+static int write(FileDescriptor fd, ByteBuffer src, long position,
+                 boolean directIO, int alignment, NativeDispatcher nd)
+    throws IOException
+{
+    // 如果是DirctBuffer，直接调用writeFromNativeBuffer并返回
+    if (src instanceof DirectBuffer) {
+        return writeFromNativeBuffer(fd, src, position, directIO, alignment, nd);
+    }
+    // ......
+    ByteBuffer bb;
+    if (directIO) {
+        Util.checkRemainingBufferSizeAligned(rem, alignment);
+        // 🔥关键语句
+        bb = Util.getTemporaryAlignedDirectBuffer(rem, alignment);
+    } else {
+        // 🔥关键语句
+        bb = Util.getTemporaryDirectBuffer(rem);
+    }
+    // ......
+}
+```
+
+👉进入`Util.getTemporaryDirectBuffer`或`Util.getTemporaryAlignedDirectBuffer`
+
+```java
+public static ByteBuffer getTemporaryDirectBuffer(int size) {
+    if (isBufferTooLarge(size)) {
+        return ByteBuffer.allocateDirect(size);
+    }
+
+    BufferCache cache = bufferCache.get();
+    ByteBuffer buf = cache.get(size);
+    if (buf != null) {
+        return buf;
+    } else {
+// ......
+        return ByteBuffer.allocateDirect(size);
+    }
+}
+```
+
+最终，都返回了一个`ByteBuffer.allocateDirect(size);`，也就是一个DirectBuffer的实例对象
+
+👉重新进入`IOUtil.write`
+
+我们可以知道，bb就是一个DirectBuffer的实例对象
+
+```java
+static int write(FileDescriptor fd, ByteBuffer src, long position,
+                 boolean directIO, int alignment, NativeDispatcher nd)
+    throws IOException
+{
+    // ......
+    try {
+        // 🔥关键语句
+        bb.put(src);
+        bb.flip();
+        // Do not update src until we see how many bytes were written
+        src.position(pos);
+		// 🔥关键语句
+        int n = writeFromNativeBuffer(fd, bb, position, directIO, alignment, nd);
+        if (n > 0) {
+            // now update src
+            src.position(pos + n);
+        }
+        return n;
+    } finally {
+        Util.offerFirstTemporaryDirectBuffer(bb);
+    }
+}
+```
+
+调用`bb.put(src);`将原ByteBuffer里的数据写到DirectBuffer bb，验证了cpu复制那一步
+
+👉进入`writeFromNativeBuffer`
+
+```java
+private static int writeFromNativeBuffer(FileDescriptor fd, ByteBuffer bb,
+                                         long position, boolean directIO,
+                                         int alignment, NativeDispatcher nd)
+    throws IOException
+{
+    // ......
+    if (position != -1) {
+        // 🔥关键语句
+        written = nd.pwrite(fd,
+                            ((DirectBuffer)bb).address() + pos,
+                            rem, position);
+    } else {
+        // 🔥关键语句
+        written = nd.write(fd, ((DirectBuffer)bb).address() + pos, rem);
+    }
+    if (written > 0)
+        bb.position(pos + written);
+    return written;
+}
+```
+
+调用了`write`和`pwrite`
+
+👉进入`write`和`pwrite`
+
+发现调用的是`FileDispatcherImpl`的方法：
+
+```java
+int write(FileDescriptor fd, long address, int len) throws IOException {
+    return write0(fd, address, len, fdAccess.getAppend(fd));
+}
+
+int pwrite(FileDescriptor fd, long address, int len, long position)
+    throws IOException
+{
+    return pwrite0(fd, address, len, position);
+}
+```
+
+点进去一看
+
+```java
+static native int write0(FileDescriptor fd, long address, int len, boolean append)
+    throws IOException;
+
+static native int pwrite0(FileDescriptor fd, long address, int len,
+                         long position) throws IOException;
+```
+
+是JNI调用，发起了用户态向内核态的上下文切换，验证了流程
+
+> PS：DMA
+>
+> 对于一个IO操作而言，都是通过CPU发出对应的指令来完成，但是相比CPU来说，IO的速度太慢了，CPU有大量的时间处于等待IO的状态。因此就产生了DMA（Direct Memory Access）直接内存访问技术，本质上来说他就是一块主板上独立的芯片，通过它来进行内存和IO设备的数据传输，从而减少CPU的等待时间
+
+> PS：很多人以为DirectBuffer是内核态的缓冲区，这是错误的，DirectBuffer是由malloc()方法分配的Java堆外空间，但仍是用户空间
+
+> 🔥为什么一定要先拷贝到DirectBuffer？直接从堆中的Buffer到内核空间不可以吗？
+>
+> **因为HotSpot VM里的GC除了CMS之外都是要移动对象的**，当一个Java里的 byte[] 对象的引用传给native代码，让native代码直接访问数组的内容，就必须要保证native代码在访问的时候这个 byte[] 对象不能被移动，即**这个地址上的内容不能失效**，这就与上面相悖了，内存可能因为GC整理内存而失效
+>
+> 有两种解决方法：
+>
+> 1. 暂时禁用GC
+> 2. 先把 HeapByteBuffer 背后的 byte[] 的内容拷贝到一个 DirectByteBuffer 背后的native memory去，GC管不着了
+>
+> 于是采用了方法2，数据被拷贝到native memory之后，就将 DirectByteBuffer 背后的native memory地址传给真正做I/O的函数，保证地址不会失效了
+
+### 直接内存
+
+如果是直接使用堆外内存呢？`ByteBuffer buffer = ByteBuffer.allocateDirect(x)`
+
+![image-20211209013530875](imgs\netty\11.png)
+
+就少了一次在Java堆内和堆外之间拷贝的过程，源码中表现为：
+
+👉进入`IOUtil.write`
+
+```java
+static int write(FileDescriptor fd, ByteBuffer src, long position,
+                 boolean directIO, int alignment, NativeDispatcher nd)
+    throws IOException
+{
+    // 如果是DirctBuffer，直接调用writeFromNativeBuffer并返回
+    if (src instanceof DirectBuffer) {
+        return writeFromNativeBuffer(fd, src, position, directIO, alignment, nd);
+    }
+    // ......
+}
+```
+
+### 零拷贝之—MMAP
+
+> [https://www.zhihu.com/question/48161206](https://www.zhihu.com/question/48161206)
+
+**零拷贝是什么？**
+
+零拷贝技术是指计算机执行操作时，CPU不需要先将数据从某处内存复制到另一个特定区域（以内核的角度看待），这种技术通常用于通过网络传输文件时节省CPU周期和内存带宽
+
+一般在Java中，可用MMAP实现零拷贝
+
+**MMAP是什么？**
+
+是一种内存映射方式，将虚拟地址的某一段与磁盘文件的某一段进行映射，造成直接操作磁盘文件的假象
+
+```java
+FileChannel fc = file.getChannel();
+// 返回DirectByteBuffer对象，建立DirectByteBuffer与磁盘文件之间的映射
+MappedByteBuffer map = fc.map(FileChannel.MapMode.READ_WRITE, 0, 5);
+```
+
+以读操作为例，以往的IO：
+
+![image-20211209021458752](imgs\netty\12.png)
+
+采用了MMAP：
+
+![image-20211209021921471](imgs\netty\13.png)
+
+少了一次内核copy到用户空间的过程
+
+但实际上，还是会进入内核态的，因为一开始用户空间的虚拟内存是空的，mmap只是做了映射，没有把数据加载到内存中。在后面访问的时候，如果没有加载到内存就会产生缺页异常，陷入内核，内核会分配出对应的物理页，并把文件数据从磁盘读到物理内存中，然后把物理页与虚拟地址建立映射，这样间接映射了虚拟地址与文件，用户就可以读写操作了。流程如下：
+
+![image-20211209022911884](imgs\netty\14.png)
+
+1. 建立mmap映射
+2. 用户进行读写操作，发现对应的虚拟地址页框是空的，产生缺页中断，陷入内核态
+3. os根据mmap映射关系找到磁盘上对应文件段，读到物理内存中，并在mmu（内存管理单元）下建立虚拟内存到对应物理内存的映射
+4. 读操作，直接返回结果；写操作，写物理页对应内容，然后系统调用fsync刷脏，刷回磁盘
+
 ## Java NIO原理
 
 > 参考：[https://tech.meituan.com/2016/11/04/nio.html](https://tech.meituan.com/2016/11/04/nio.html)
 
+
+
 ## 三大核心组件
 
 ### 概述
+
+
 
 ### Buffer
 
@@ -333,6 +594,68 @@ System.out.println(intBuffer.get());
 
 **每次flip，limit都会变成上次读/写的位置，然后从开头或设置的位置往后操作**
 
+#### 类型化与只读
+
+- 类型化
+
+```java
+ByteBuffer buffer = ByteBuffer.allocate(3);
+// 会异常，只给buffer分配了3字节，溢出了
+buffer.putInt(1);
+
+ByteBuffer buffer = ByteBuffer.allocate(14);
+buffer.putInt(1).putChar('A').putLong(8);
+buffer.flip();
+// 必须按顺序读取
+System.out.println(buffer.getInt());
+System.out.println(buffer.getChar());
+System.out.println(buffer.getLong());
+```
+
+- 只读
+
+```java
+ByteBuffer buffer = ByteBuffer.allocate(1024);
+buffer.putInt(1).putChar('A').putLong(8);
+buffer.flip();
+// 只读
+// 返回HeapByteBufferR的实例，做写操作会抛出异常
+buffer = buffer.asReadOnlyBuffer();
+buffer.putInt(1);
+// Exception in thread "main" java.nio.ReadOnlyBufferException
+// at java.base/java.nio.HeapByteBufferR.putInt(HeapByteBufferR.java:448)
+// at Demo.main(Demo.java:20)
+```
+
+#### 堆外内存
+
+可直接对堆外内存操作，减少了一次堆外内存和堆内内存之间拷贝的过程
+
+
+
+```java
+try(RandomAccessFile file = new RandomAccessFile("1.txt", "rw");
+    FileChannel fc = file.getChannel();){
+    // 以读写模式
+    // 从0位置开始将文件后面5个字节大小映射到堆外内存(不是索引位置为5)
+    // 返回DirectByteBuffer对象
+    MappedByteBuffer map = fc.map(FileChannel.MapMode.READ_WRITE, 0, 5);
+    map.put(3, (byte) 'X');
+} catch (IOException e) {
+    e.printStackTrace();
+}
+```
+
+#### 分散和聚集
+
+- 分散（Scattering）
+
+
+
+- 聚集（Gathering）
+
+
+
 ### Channel
 
 #### 概述
@@ -365,6 +688,10 @@ public long transferTo(long position, long count, WritableByteChannel dst);
 
 > 不同于InputStream/Reader只能读，OutputStream/Writer只能写
 
+- 读写
+
+实现1.txt的内容拷贝到2.txt
+
 ```java
 public static void main(String[] args) throws IOException {
     File file = new File("1.txt");
@@ -390,10 +717,25 @@ public static void main(String[] args) throws IOException {
 }
 ```
 
+- 通道拷贝
+
+```java
+public static void main(String[] args) throws IOException {
+    File file = new File("1.txt");
+    File file2 = new File("2.txt");
+    try (FileChannel readChannel = FileChannel.open(file.toPath(), StandardOpenOption.READ);
+         FileChannel writeChannel = FileChannel.open(file2.toPath(), StandardOpenOption.WRITE)){
+        writeChannel.transferFrom(readChannel, 0, readChannel.size());
+    }
+}
+```
+
 
 
 # 参考
 
 - [服务器网络编程之 IO 模型 - 掘金 (juejin.cn)](https://juejin.cn/post/6844903812738596878)
 - [https://tech.meituan.com/2016/11/04/nio.html](https://tech.meituan.com/2016/11/04/nio.html)
+- [https://mp.weixin.qq.com/s?__biz=MzkzNTEwOTAxMA==&mid=2247491660&idx=1&sn=a7d79ec4cc3f40e7b9a9018436a7377a&chksm=c2b1a8b1f5c621a7268ca298598a15c4ac575790628651e5651925b5efd96ebc0046796ef5b1&token=570732653&lang=zh_CN#rd](https://mp.weixin.qq.com/s?__biz=MzkzNTEwOTAxMA==&mid=2247491660&idx=1&sn=a7d79ec4cc3f40e7b9a9018436a7377a&chksm=c2b1a8b1f5c621a7268ca298598a15c4ac575790628651e5651925b5efd96ebc0046796ef5b1&token=570732653&lang=zh_CN#rd)
+- [https://www.zhihu.com/question/48161206](https://www.zhihu.com/question/48161206)
 
