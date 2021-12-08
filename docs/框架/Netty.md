@@ -154,6 +154,242 @@ telnet 127.0.0.1 6666
 
 > 参考：[https://tech.meituan.com/2016/11/04/nio.html](https://tech.meituan.com/2016/11/04/nio.html)
 
+## 三大核心组件
+
+### 概述
+
+### Buffer
+
+#### 概述
+
+本质上是一个可以读写数据的内存块，可以理解成一个容器对象（底层由数组存储）。Buffer是一个顶层父类，子类有ByteBuffer*（最常用）*、IntBuffer等
+
+在旧I/O类库中（相对java.nio包）中的BufferedInputStream、BufferedOutputStream、BufferedReader和BufferedWriter在其实现中都运用了缓冲区。java.nio包公开了Buffer API，使得Java程序可以直接控制和运用缓冲区
+
+#### 源码分析
+
+以IntBuffer为例
+
+- 初始化
+
+```java
+IntBuffer intBuffer = IntBuffer.allocate(5);
+```
+
+```java
+public static IntBuffer allocate(int capacity) {
+    if (capacity < 0)
+        throw new IllegalArgumentException();
+    return new HeapIntBuffer(capacity, capacity);
+}
+```
+
+返回一个HeapIntBuffer，capacity为参数
+
+```java
+HeapIntBuffer(int cap, int lim) {            // package-private
+    super(-1, 0, lim, cap, new int[cap], 0);
+    /*
+    hb = new int[cap];
+    offset = 0;
+    */
+}
+```
+
+调用了父类的构造器
+
+```java
+IntBuffer(int mark, int pos, int lim, int cap,   // package-private
+             int[] hb, int offset)
+{
+    super(mark, pos, lim, cap);
+    this.hb = hb;
+    this.offset = offset;
+}
+```
+
+结合上面可知，`hb = new int[cap]`，`offset = 0`，调用了`super(mark, pos, lim, cap)`，其中：`mark=-1`，`pos=0`，`lim=最初的capacity=5`，`cap=最初的capacity=5`
+
+```java
+Buffer(int mark, int pos, int lim, int cap) {       // package-private
+    if (cap < 0)
+        throw new IllegalArgumentException("Negative capacity: " + cap);
+    this.capacity = cap;
+    limit(lim);
+    position(pos);
+    if (mark >= 0) {
+        if (mark > pos)
+            throw new IllegalArgumentException("mark > position: ("
+                                               + mark + " > " + pos + ")");
+        this.mark = mark;
+    }
+}
+```
+
+到最顶层的构造方法，分别给Buffer的四大属性：`capacity、limit、position、mark`赋值为5，5，0，-1
+
+初始化顺序：Buffer → IntBuffer → HeapIntBuffer
+
+- 添加
+
+```java
+public abstract IntBuffer put(int i);
+```
+
+返回一个IntBuffer，说明是链式的，一条语句可以多次put
+
+点进实现类的方法
+
+```java
+public IntBuffer put(int x) {
+    hb[ix(nextPutIndex())] = x;
+    return this;
+}
+```
+
+点进nextPutIndex
+
+```java
+final int nextPutIndex() {                          // package-private
+    if (position >= limit)
+        throw new BufferOverflowException();
+    return position++;
+}
+```
+
+返回的是position，并令position++，由此可见，position相当于一个游标的作用
+
+点进ix方法
+
+```java
+protected int ix(int i) {
+    return i + offset;
+}
+```
+
+offset初始化时设置为0，拉下来整体看一下，大概就是这样的流程：`hb[position++]=x`
+
+position>=limit，会报错
+
+- 读取
+
+以一个现象开头：
+
+```java
+IntBuffer intBuffer = IntBuffer.allocate(5);
+intBuffer.put(1).put(2).put(3);
+System.out.println(intBuffer.get());
+```
+
+打印0，为何？
+
+点进get
+
+```java
+public int get() {
+    return hb[ix(nextGetIndex())];
+}
+
+public int get(int i) {
+    return hb[ix(checkIndex(i))];
+}
+```
+
+```java
+final int nextGetIndex() {                          // package-private
+    if (position >= limit)
+        throw new BufferUnderflowException();
+    return position++;
+}
+```
+
+发现从position开始读，也就是将要写的新位置，自然会读到0。读完后position++
+
+- 读写切换
+
+```java
+intBuffer.flip();
+```
+
+```java
+public final Buffer flip() {
+    limit = position;
+    position = 0;
+    mark = -1;
+    return this;
+}
+```
+
+position写到哪儿，limit就限制到哪儿；position置位，mark置位
+
+```java
+IntBuffer intBuffer = IntBuffer.allocate(5);
+intBuffer.put(1).put(2).put(3);
+intBuffer.flip();
+System.out.println(intBuffer.get());
+```
+
+这样便可正常从开头读
+
+**每次flip，limit都会变成上次读/写的位置，然后从开头或设置的位置往后操作**
+
+### Channel
+
+#### 概述
+
+![img](imgs\netty\9.png)
+
+- 双向的（不同于流），可以读也可以写
+- 是一个接口
+
+常用：
+
+- FileChannel：文件读写
+- DatagramChannel：UDP读写
+- ServerSocketChannel、SocketChannel：TCP读写
+
+客户端连接服务器时，服务器端给客户端分配一个ServerSocketChannel，后续与该客户端的通信都基于这个Channel来进行
+
+#### FileChannel
+
+文件读写操作
+
+常用方法：
+
+```java
+public int read(ByteBuffer dst);
+public int write(ByteBuffer src);
+public long transferFrom(ReadableByteChannel src, long position, long count);
+public long transferTo(long position, long count, WritableByteChannel dst);
+```
+
+> 不同于InputStream/Reader只能读，OutputStream/Writer只能写
+
+```java
+public static void main(String[] args) throws IOException {
+    File file = new File("1.txt");
+    File file2 = new File("2.txt");
+    ByteBuffer buffer = ByteBuffer.allocate(5);
+    try (FileChannel readChannel = FileChannel.open(file.toPath(), StandardOpenOption.READ);
+         FileChannel writeChannel = FileChannel.open(file2.toPath(), StandardOpenOption.WRITE)){
+        while (true){
+            // 缓存读完后需要clear，否则会一直read 0，position位置不变
+            buffer.clear();
+            int read = readChannel.read(buffer);
+            if (read == -1){
+                break;
+            }
+            // 注意Java内码和外码的区别，内码UTF-16，字符占2字节；外码比如UTF-8存储中英文是不等长的
+            System.out.print(new String(buffer.array(), "UTF-8"));
+
+            //读写切换
+            buffer.flip();
+            writeChannel.write(buffer);
+        }
+    }
+}
+```
+
 
 
 # 参考
