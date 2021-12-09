@@ -333,6 +333,10 @@ static native int pwrite0(FileDescriptor fd, long address, int len,
 > 对于一个IO操作而言，都是通过CPU发出对应的指令来完成，但是相比CPU来说，IO的速度太慢了，CPU有大量的时间处于等待IO的状态。因此就产生了DMA（Direct Memory Access）直接内存访问技术，本质上来说他就是一块主板上独立的芯片，通过它来进行内存和IO设备的数据传输，从而减少CPU的等待时间
 
 > PS：很多人以为DirectBuffer是内核态的缓冲区，这是错误的，DirectBuffer是由malloc()方法分配的Java堆外空间，但仍是用户空间
+>
+> 本文图片为了简明易懂，将DirectBuffer画到了堆外，实际上在Java中DirectBuffer对象肯定是在堆内的，是他的address属性为堆外的某个地址，一块调用 malloc() 申请到的native memory，类似于下图：
+>
+> ![image-20211209093203742](imgs\netty\15.png)
 
 > 🔥为什么一定要先拷贝到DirectBuffer？直接从堆中的Buffer到内核空间不可以吗？
 >
@@ -346,6 +350,8 @@ static native int pwrite0(FileDescriptor fd, long address, int len,
 > 于是采用了方法2，数据被拷贝到native memory之后，就将 DirectByteBuffer 背后的native memory地址传给真正做I/O的函数，保证地址不会失效了
 
 ### 直接内存
+
+> [https://www.zhihu.com/question/57374068](https://www.zhihu.com/question/57374068)
 
 如果是直接使用堆外内存呢？`ByteBuffer buffer = ByteBuffer.allocateDirect(x)`
 
@@ -738,4 +744,5 @@ public static void main(String[] args) throws IOException {
 - [https://tech.meituan.com/2016/11/04/nio.html](https://tech.meituan.com/2016/11/04/nio.html)
 - [https://mp.weixin.qq.com/s?__biz=MzkzNTEwOTAxMA==&mid=2247491660&idx=1&sn=a7d79ec4cc3f40e7b9a9018436a7377a&chksm=c2b1a8b1f5c621a7268ca298598a15c4ac575790628651e5651925b5efd96ebc0046796ef5b1&token=570732653&lang=zh_CN#rd](https://mp.weixin.qq.com/s?__biz=MzkzNTEwOTAxMA==&mid=2247491660&idx=1&sn=a7d79ec4cc3f40e7b9a9018436a7377a&chksm=c2b1a8b1f5c621a7268ca298598a15c4ac575790628651e5651925b5efd96ebc0046796ef5b1&token=570732653&lang=zh_CN#rd)
 - [https://www.zhihu.com/question/48161206](https://www.zhihu.com/question/48161206)
+- [https://www.zhihu.com/question/57374068](https://www.zhihu.com/question/57374068)
 
