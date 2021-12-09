@@ -6,6 +6,186 @@
 
 应用场景：RPC框架等
 
+# TCP通信基础
+
+## 引言
+
+以一个例子入手：
+
+```sh
+exec 8<> /dev/tcp/www.baidu.com/80
+echo -e "GET / HTTP/1.0\n" 1>& 8
+cat 0<& 8
+```
+
+逐行解释：
+
+- `exec 8<> /dev/tcp/www.baidu.com/80`
+
+  - linux一切皆文件，/dev/tcp/www.baidu.com/80看似是路径实则是一个socket，用8指向了一个socket，8就相当于一个通信的channel，<>代表输入输出流
+
+  - 8 → fd：文件描述符，可以理解成类似Java中的变量引用
+
+  - exec：首先理解一下shell是什么？
+
+    > shell的英文含义是“壳”；
+    >
+    > 它是相对于内核来说的，因为它是建立在内核的基础上，面向于用户的一种表现形式，比如我们看到一个球，见到的是它的壳，而非核
+    >
+    > Linux中的shell，是指一个面向用户的命令接口，表现形式就是一个可以由用户录入的界面，这个界面也可以反馈运行信息；相当于一个死循环，不断read用户的指令录入，并返回结果
+
+    - exec后面接上指令，该指令会替换掉shell，比如exec ls命令，ls会显示目录后退出，如果用ls替换shell，执行完毕后，用户与系统的链接也就断开了
+
+      ![image-20211209165351917](imgs\netty\16.png)
+
+    - 任何程序都有输入输出流，比如ls 1>xxx.txt，1是一个fd，代表标准输出流，通过>重定向到xxx.txt
+
+      ![image-20211209165756780](imgs\netty\17.png)
+
+    - 可以通过exec给出重定向的绑定，解释起来就是：建立文件描述符8，并将它的输入输出流与socket绑定到一起
+
+- `echo -e "GET / HTTP/1.0\n" 1>& 8`
+
+  - 1是echo命令的绑定标准输出流的fd
+  - 发送一个http协议头到8指向的socket
+  - \>：到文件；>&：到另一个fd
+
+- `cat 0<& 8`
+
+  - 输入到cat的fd 0
+  - cat的作用是打印
+
+执行结果：
+
+![image-20211209170735795](imgs\netty\18.png)
+
+## 什么是TCP协议？
+
+传输控制层的**，面向连接的，可靠的传输协议**（两个重点）
+
+### 什么是面向连接的？
+
+**三次握手概述：**
+
+![image-20211209172534759](imgs\netty\19.png)
+
+双方确认对方都能收到后，会分别自己开启服务资源，用于处理自己包的发送和接收对方的包
+
+**只有在三次握手之后，双方完成了服务资源的开辟，才可以说连接被建立了**
+
+这里的连接，不是指物理的，而是双方有相互的通信信道及对应的服务资源
+
+- **三次握手带来了连接，确认机制保证了可靠的传输**
+- 三次握手是由四层（TCP/IP五层模型/OSI七层模型下面四层）内核完成的，数据传输是由七层用户完成的
+
+---
+
+**四次挥手概述：**
+
+![image-20211209200639113](imgs\netty\22.png)
+
+双方都确认关闭资源了，才断开连接
+
+### 什么是socket？
+
+**socket是对TCP/IP协议的封装，它的出现只是使得程序员更方便地使用TCP/IP协议栈而已。socket本身并不是协议，它是应用层与TCP/IP协议族通信的中间软件抽象层，是一组调用接口（TCP/IP网络的API函数）**
+
+socket一定是成对的：ip+port对应另一个ip+port，能够代表一个独立的连接
+
+![image-20211209173604365](imgs\netty\20.png)
+
+> 面试题：
+>
+> 1. ipC为客户端，向ipA:80最多能建立多少个连接？
+>
+>    65535个，客户端端口随机分配，范围0~65535，0是被保留的
+>
+> 2. 与ipA:80建立了65535个连接后，可以继续和ipB:80建立链接吗？
+>
+>    可以，因为一个套接字是由4个维度来确定的
+
+对于服务端的22端口已经建立了若干个连接，有另外的客户端带着数据包过来，经过三次握手后，服务端开辟资源并fork进程/线程，令一个单独的进程/线程持有该socket（通过文件描述符来唯一标识，比如上面那个例子中的“8”）
+
+> 多个socket对应一个进程/线程：多路复用（select/epoll）
+
+### 抓包验证
+
+开一个终端，运行`tcpdump -nn (加-X可以打印出详细的抓到的数据) -i eth0 port 80`抓包
+
+新开一个终端，运行`curl www.baidu.com`
+
+![image-20211209195727445](imgs\netty\21.png)
+
+- 第一段为三次握手，数据包大小为0
+- 第二段为数据传输，随机分配的57300端口和百度80端口之间互相通信，注意发送和确认机制
+- 第三段为四次挥手，数据包大小为0
+
+## 网络通信流程简述
+
+> [https://blog.csdn.net/Stephen___Qin/article/details/120466415](https://blog.csdn.net/Stephen___Qin/article/details/120466415)
+>
+> [https://blog.csdn.net/weixin_44786530/article/details/89382641](https://blog.csdn.net/weixin_44786530/article/details/89382641)
+
+![img](imgs\netty\23.png)
+
+以一个例子来说，一个HTTP数据包想要发送给百度
+
+> 查看本机网卡：`vi /etc/sysconfig/network-scripts/ifcfg-enp0s3 `
+>
+> ![image-20211209212605473](imgs\netty\24.png)
+>
+> dhcp随机分配ip
+
+查看本机IP：`ifconfig`
+
+![image-20211209212828680](imgs\netty\25.png)
+
+查看百度IP：`ping`
+
+![image-20211209213314405](imgs\netty\26.png)
+
+也就是说：从192.168.199.66某个端口向110.242.68.3某个端口进行通信
+
+> 一个ip地址，掩码覆盖的范围为网络部分，剩下为主机部分
+
+- 首先，将HTTP数据包封装成TCP数据包，准备向目标主机端口发送
+
+- 传输TCP数据包需要经过网络层，封装成IP数据包并转发
+
+  在路由表中，将目标地址与每一条的掩码相与求出网络部分，看看是否能与Destination匹配
+
+  ![image-20211209214006461](D:\笔记\秋招\docs\框架\imgs\netty\27.png)
+
+  ​	目标地址为110.242.68.3，相与结果为：
+
+  ​	① 0.0.0.0；② 110.242.0.0；③ 110.242.68.0；④ 110.242.68.0
+
+  只有第一个能够匹配，于是发送给Gateway 192.168.199.1转发，192.168.199.1再经历相同过程向下一个路由节点转发
+
+- 设想一下：路由节点转发过程中，目标IP（110.242.68.3）与本机匹配不上，为什么不会选择丢包而是继续转发呢？这就涉及到链路层ARP协议了
+
+  - 在路由转发过程中，首先会根据下一跳节点的IP，请求对应主机返回自己的MAC地址，存在本机ARP列表
+
+    ![image-20211209215456612](imgs\netty\29.png)
+
+  - 根据ARP列表，发现对应的MAC为34:96:72:1c:fa:3e，将IP数据包封装成MAC数据包，发送到主机192.168.199.1
+
+  - 192.168.199.1发现MAC包就是自己的地址，但IP不匹配，于是需要继续转发，将MAC头清除，并根据ARP列表封装下一跳的MAC地址
+
+  - 发送给物理层进行传输
+
+- 若干跳之后，终于到达百度，发现IP匹配，拆封，根据目标端口号在对应端口号上开辟服务资源
+
+> 同一网段下的主机，路由表对应的掩码为255.255.255.0，gateway为0.0.0.0，表示不用利用网关进行转发，只需要通过链路层交换机即可
+
+> 内网数据传输：主机 → 交换机（LAN口） → 主机
+>
+> 外网数据传输：主机 → 交换机 → 路由器（WAN口） → 若干个路由器 → 交换机 → 主机
+>
+> 传输过程中，目标IP不变，MAC地址不断变化
+
+> VPN传输：IP数据包里面再包一个加密的IP数据包，外面的到香港，里面的到美国（举个简单的例子）
+
 # IO模型
 
 ## 一些概念
@@ -20,6 +200,8 @@
 > 阻塞可以是实现同步的一种手段；例如两个东西需要同步，一旦出现不同步情况，我就阻塞快的一方，使双方达到同步
 >
 > 同步是两个对象之间的关系，而阻塞是一个对象的状态
+>
+> **阻塞非阻塞的划分标准是“调用者是否需要一直阻塞等待IO操作就绪”**
 >
 > **同步异步的划分标准是“调用者是否需要等待I/O操作完成”**
 
@@ -53,6 +235,8 @@
    - 有，则客户端阻塞等待到请求完成后，再执行接下来的操作
 
 **服务端：**
+
+- 旧IO实现：
 
 ```java
 /**
@@ -94,6 +278,49 @@ public class BIOServer {
 }
 ```
 
+- Java NIO实现版：
+
+```java
+/**
+ *  @ClassName: BIOServer
+ *  @Description:
+ *  @Author: 747591245@qq.com
+ *  @Date: 2021/12/6
+ */
+public class BIOServer {
+    public static void main(String[] args) throws IOException {
+        ExecutorService service = Executors.newFixedThreadPool(10);
+        ServerSocketChannel ss = ServerSocketChannel.open();
+        ss.bind(new InetSocketAddress(6666));
+        while (true){
+            System.out.println("当前线程数: " + ((ThreadPoolExecutor) service).getActiveCount());
+            final SocketChannel accept = ss.accept();
+            service.execute(new Runnable() {
+                @Override
+                public void run() {
+                    handler(accept);
+                }
+            });
+        }
+    }
+    public static void handler(SocketChannel socket){
+        try (socket){
+            ByteBuffer bytes = ByteBuffer.allocate(1024);
+            while (true){
+                int read = socket.read(bytes);
+                if (read != -1){
+                    System.out.println(new String(bytes.array(), 0, read));
+                }else {
+                    break;
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
 **客户端利用telnet建立连接：**
 
 ```sh
@@ -101,6 +328,8 @@ telnet 127.0.0.1 6666
 ```
 
 ![image-20211206205206839](imgs\netty\8.png)
+
+每新建一个连接，创建一个线程
 
 大并发需要创建大量线程，消耗资源；read读不到数据会阻塞，造成系统资源的浪费
 
@@ -111,7 +340,37 @@ telnet 127.0.0.1 6666
 应用进程每次调用 recvfrom 即使没有数据准备好也不会阻塞，会继续往下执行，避免了进程阻塞在某个连接上的弊端
 
 - 优点：代码编写相对简单，进程不会阻塞，可以在同一线程中处理所有连接
-- 缺点：需要频繁的轮询，比较耗CPU，在并发量很大的时候将花费大量时间在没有任何数据的连接上轮询。所以该模型只在专门提供某种功能的系统中才会出现
+- 缺点：需要频繁的轮询，比较耗CPU，在并发量很大的时候将花费大量时间在没有任何数据的连接上轮询，且每次轮询所有channel，调用recv，会产生相应次数的软中断，发生系统调用，开销很大。所以该模型只在专门提供某种功能的系统中才会出现
+
+#### 编程实现
+
+```java
+ServerSocketChannel ss = ServerSocketChannel.open();
+ss.bind(new InetSocketAddress(6666));
+ss.configureBlocking(false);
+List<SocketChannel> channels = new LinkedList<>();
+while (true){
+    final SocketChannel accept = ss.accept();
+    if (accept != null){
+        accept.configureBlocking(false);
+        channels.add(accept);
+    }
+    for (SocketChannel channel: channels){
+        ByteBuffer bytes = ByteBuffer.allocate(1024);
+        bytes.clear();
+        int read = channel.read(bytes);
+        if (read > 0){
+            System.out.println(new String(bytes.array(), 0, read));
+        }
+    }
+}
+```
+
+改成非阻塞模式，一个主线程就可以处理多个IO
+
+![image-20211210014721230](imgs\netty\31.png)
+
+设想一下，每次需要轮询所有的channel，假如有10000个连接，就需要轮询10000次，进行10000次系统调用，开销非常大，如果只有一个channel有效，其他9999次都是浪费的。能不能有一种方法，针对有效的channel进行一次recv系统调用，然后针对其他所有的9999个channel，只发起一次内核系统调用，总共只有两次系统调用，这，就是**多路复用**
 
 ### 3、IO 复用模型（IO multiplexing）
 
@@ -148,7 +407,52 @@ telnet 127.0.0.1 6666
 
 ![img](imgs\netty\7.png)
 
+# 操作系统中的SELECT/POLL/EPOLL
+
+设想一下，在NIO模式下，每次需要轮询所有的channel，假如有10000个连接，就需要轮询10000次，进行10000次系统调用，开销非常大，如果只有一个channel有效，其他9999次都是浪费的。能不能有一种方法，针对有效的channel进行一次recv系统调用，然后针对其他所有的9999个channel，只发起一次内核系统调用，总共只有两次系统调用，这，就是**多路复用**
+
+内核提供select、poll、epoll实现多路复用
+
+## select
+
+**同步的IO多路复用器**
+
+![image-20211210030513430](imgs\netty\32.png)
+
+> nfds：所有文件描述符；可读集合；可写集合；异常集合；超时时间
+
+- 允许一个程序监控多个文件描述符，select**返回文件描述符状态**，真正IO调用还需要通过程序使用recv等指令
+- **如果程序自己读取IO，那么它就是同步的**
+- select限制1024个文件描述符
+- 用户一次性将所有文件描述符交给内核，由内核去遍历并返回状态，**只需一次系统调用**，而非NIO中，需进行nfds次系统调用（用户空间遍历若干次，若干次陷入内核 → 用户陷入一次内核，在内核内部遍历）
+
+弊端：在nfds大的情况下：① 将nfds拷贝到内核态的大开销；② 内核遍历的大开销；③ 只支持1024个，太小了，若要增加，除非修改源码并重新编译内核
+
+## poll
+
+poll的实现和select非常相似，只是描述fd集合的方式不同，poll使用pollfd结构而不是select的fd_set结构，且不限制1024，其他的都差不多
+
+### epoll
+
+改进：
+
+1. 重复拷贝fd，解决方案：内核开辟空间存放fd
+2. 每调用一次select/poll，就会全部重新遍历一次，解决方案：
+
 # Java NIO
+
+> 注意：是Java New IO，操作系统中是Non-Blocking IO，内核提供的SOCK_NONBLOCKING功能
+>
+> ![image-20211209225356014](imgs\netty\30.png)
+>
+> Java中可以设置阻塞和非阻塞模式
+>
+> ```java
+> ServerSocketChannel socketChannel = ServerSocketChannel.open();
+> socketChannel.bind(new InetSocketAddress(8080));
+> // true - blocking;  false - non-blocking
+> socketChannel.configureBlocking(true); 
+> ```
 
 ## Java IO流程
 
@@ -736,6 +1040,15 @@ public static void main(String[] args) throws IOException {
 }
 ```
 
+### Selector
+
+#### 概述
+
+- 一个线程，处理多个连接
+- 多个Channel以事件的方式可以注册到同一个Selector
+- 能够检测多个注册的通道上是否有事件发生，如果有，便获取对应事件并处理
+- 不必为每个连接都创建一个线程，减少了多线程上下文切换导致的开销
+
 
 
 # 参考
@@ -745,4 +1058,5 @@ public static void main(String[] args) throws IOException {
 - [https://mp.weixin.qq.com/s?__biz=MzkzNTEwOTAxMA==&mid=2247491660&idx=1&sn=a7d79ec4cc3f40e7b9a9018436a7377a&chksm=c2b1a8b1f5c621a7268ca298598a15c4ac575790628651e5651925b5efd96ebc0046796ef5b1&token=570732653&lang=zh_CN#rd](https://mp.weixin.qq.com/s?__biz=MzkzNTEwOTAxMA==&mid=2247491660&idx=1&sn=a7d79ec4cc3f40e7b9a9018436a7377a&chksm=c2b1a8b1f5c621a7268ca298598a15c4ac575790628651e5651925b5efd96ebc0046796ef5b1&token=570732653&lang=zh_CN#rd)
 - [https://www.zhihu.com/question/48161206](https://www.zhihu.com/question/48161206)
 - [https://www.zhihu.com/question/57374068](https://www.zhihu.com/question/57374068)
-
+- [https://www.cnblogs.com/baxianhua/p/9285102.html](https://www.cnblogs.com/baxianhua/p/9285102.html)
+- [https://blog.csdn.net/Stephen___Qin/article/details/120466415](https://blog.csdn.net/Stephen___Qin/article/details/120466415)
