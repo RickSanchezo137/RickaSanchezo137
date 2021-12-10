@@ -26,6 +26,8 @@ cat 0<& 8
 
   - 8 → fd：文件描述符，可以理解成类似Java中的变量引用
 
+    > [https://www.zhihu.com/search?type=content&q=%E6%96%87%E4%BB%B6%E6%8F%8F%E8%BF%B0%E7%AC%A6](https://www.zhihu.com/search?type=content&q=%E6%96%87%E4%BB%B6%E6%8F%8F%E8%BF%B0%E7%AC%A6)
+
   - exec：首先理解一下shell是什么？
 
     > shell的英文含义是“壳”；
@@ -409,6 +411,10 @@ while (true){
 
 # 操作系统中的SELECT/POLL/EPOLL
 
+> :star2:这里有一个写得很清晰易懂的博客：[https://blog.csdn.net/wangwei19871103/article/details/104080859](https://blog.csdn.net/wangwei19871103/article/details/104080859)
+>
+> :star:源码级解析：[https://www.cnblogs.com/Anker/p/3265058.html](https://www.cnblogs.com/Anker/p/3265058.html)
+
 设想一下，在NIO模式下，每次需要轮询所有的channel，假如有10000个连接，就需要轮询10000次，进行10000次系统调用，开销非常大，如果只有一个channel有效，其他9999次都是浪费的。能不能有一种方法，针对有效的channel进行一次recv系统调用，然后针对其他所有的9999个channel，只发起一次内核系统调用，总共只有两次系统调用，这，就是**多路复用**
 
 内核提供select、poll、epoll实现多路复用
@@ -417,35 +423,125 @@ while (true){
 
 **同步的IO多路复用器**
 
+`man (2) select`：（2表示系统调用，可用`man man`查看）
+
 ![image-20211210030513430](imgs\netty\32.png)
 
-> nfds：所有文件描述符；可读集合；可写集合；异常集合；超时时间
+> - nfds：所有已注册的最大文件描述符 + 1
+>
+>   遍历小于该值的值，就能遍历到所有文件描述符。会一次性将内存描述符从用户态拷贝到内核态
+>
+> - 可读集合
+>
+>   fd_set可以看作是一个位图，内核遍历过程中发现某一socket发生了事件，假定为读事件，就根据它的文件描述符映射到readfds的某一位，将该位 置为1
+>
+> - 可写集合
+>
+> - 异常集合
+>
+> - 超时时间
 
 - 允许一个程序监控多个文件描述符，select**返回文件描述符状态**，真正IO调用还需要通过程序使用recv等指令
+
 - **如果程序自己读取IO，那么它就是同步的**
+
 - select限制1024个文件描述符
+
 - 用户一次性将所有文件描述符交给内核，由内核去遍历并返回状态，**只需一次系统调用**，而非NIO中，需进行nfds次系统调用（用户空间遍历若干次，若干次陷入内核 → 用户陷入一次内核，在内核内部遍历）
 
-弊端：在nfds大的情况下：① 将nfds拷贝到内核态的大开销；② 内核遍历的大开销；③ 只支持1024个，太小了，若要增加，除非修改源码并重新编译内核
+  > 状态的返回是通过将fd_set拷贝到用户空间
+
+弊端：在nfds大的情况下：① 将nfds拷贝到内核态的大开销；② 内核遍历的大开销；③ 只支持1024个，太小了，若要增加，除非修改源码并重新编译内核；④ 调用select后，根据返回值 > 0能够判断发生了事件，但具体不知道是哪里发生了什么事件，必须遍历每个fd_set的每一位，确定哪一位为1，这一位的索引位置就是文件描述符，再令程序进行IO操作
 
 ## poll
 
-poll的实现和select非常相似，只是描述fd集合的方式不同，poll使用pollfd结构而不是select的fd_set结构，且不限制1024，其他的都差不多
+![image-20211210161825305](imgs\netty\35.png)
 
-### epoll
+```c
+struct pollfd {
+    int fd;        /* 文件描述符 */
+    short events; /* 等待的事件 */
+    short revents; /* 实际发生了的事件 */
+};
+```
+
+poll的实现和select非常相似，只是描述fd集合的方式不同，poll使用pollfd结构而不是select的fd_set结构，且不限制1024，其他的都差不多；此外，调用select时需要自定义读、写、异常的fd_set，而poll提供了pollfd数组，每个pollfd元素包含文件描述符和要监听的事件，以及对应产生了的事件，加入时直接往pollfd数组中放就行，返回时去查看revents
+
+> 即想要注册一个监听读事件的fd，假设为7
+>
+> 在select中：
+>
+> ```c++
+> fd_set rfds;//定义一个读集合
+> struct timeval tv;//定义超时结构体
+> int retval;//返回值
+> 
+> /* 监听标准输入*/
+> FD_ZERO(&rfds);//将集合清0
+> FD_SET(7, &rfds);//将描述符7添加进去
+> 
+> /* 设置超时 */
+> tv.tv_sec = 5;
+> tv.tv_usec = 0;
+> /* 开始监听，写事件和异常不监听 */
+> retval = select(8, &rfds, NULL, NULL, &tv);
+> ```
+>
+> 在poll中：
+>
+> ```c++
+> struct pollfd pfds[1];
+> pfds[0].fd=7;
+> pfds[0].events=POLLIN;//读事件
+> 
+> retval = poll(pfds, 8,-1);
+> ```
+>
+> 方便了很多
+
+## epoll
+
+![image-20211210162320729](imgs\netty\36.png)
+
+> 返回epoll句柄，创建红黑树，用于存放fd
+
+![image-20211210112417854](imgs\netty\34.png)
+
+> 参数分别是：epoll句柄（描述符）、操作、socket、要监听的事件
+
+![image-20211210162418418](imgs\netty\37.png)
+
+> 返回事件的个数
+>
+> epoll_wait中的events是个传出参数（是一个指针，对它的修改当然是调用者可见的，相当于Java中的引用类型的参数），事件和对应的fd等等都在这里，就很方便
+>
+> ![image-20211210162705232](imgs\netty\38.png)
 
 改进：
 
+select和poll都只提供了一个函数——select或者poll函数。而epoll提供了三个函数，epoll_create,epoll_ctl和epoll_wait，epoll_create是创建一个epoll句柄；epoll_ctl是注册要监听的事件类型；epoll_wait则是等待事件的产生
+
 1. 重复拷贝fd，解决方案：内核开辟空间存放fd
-2. 每调用一次select/poll，就会全部重新遍历一次，解决方案：
+
+   > 每次调用epoll_ctl时注册fd时就拷贝进内核的某个开辟好的空间，避免了重复拷贝
+
+2. 每调用一次select/poll，就会全部重新遍历一次，解决方案：利用回调机制，将就绪的IO操作对应的socket放入ready队列
+
+   > 在epoll_ctl时为fd指定一个回调函数，当设备就绪（注册时的类型事件发生），就会调用这个回调函数，而这个回调函数会把就绪的fd加入一个就绪链表。epoll_wait的工作实际上就是在这个就绪链表中查看有没有就绪的fd
+
+![image-20211210104832226](imgs\netty\33.png)
+
+> epoll_wait在没有事件发生，即就绪链表为空时会阻塞，不过可以设置超时时间
+>
+> select/poll在内核遍历时会阻塞直到事件发生，这期间内核会不断循环遍历，同样可以设置超时时间，下次调用依然要重新遍历，而epoll只需要调用epoll_wait取，是接近O(1)的
 
 # Java NIO
 
-> 注意：是Java New IO，操作系统中是Non-Blocking IO，内核提供的SOCK_NONBLOCKING功能
+> 注意：是Java New IO，操作系统中NIO是指Non-Blocking IO，是内核提供的SOCK_NONBLOC功能（指令`man accept`查看）
 >
 > ![image-20211209225356014](imgs\netty\30.png)
 >
-> Java中可以设置阻塞和非阻塞模式
+> Java中可以设置阻塞和非阻塞模式，证明不是单指Non-Blocking IO；实际上，Java NIO是多路复用，select、epoll等都是需要阻塞的
 >
 > ```java
 > ServerSocketChannel socketChannel = ServerSocketChannel.open();
@@ -457,6 +553,8 @@ poll的实现和select非常相似，只是描述fd集合的方式不同，poll�
 ## Java IO流程
 
 > [https://mp.weixin.qq.com/s?__biz=MzkzNTEwOTAxMA==&mid=2247491660&idx=1&sn=a7d79ec4cc3f40e7b9a9018436a7377a&chksm=c2b1a8b1f5c621a7268ca298598a15c4ac575790628651e5651925b5efd96ebc0046796ef5b1&token=570732653&lang=zh_CN#rd](https://mp.weixin.qq.com/s?__biz=MzkzNTEwOTAxMA==&mid=2247491660&idx=1&sn=a7d79ec4cc3f40e7b9a9018436a7377a&chksm=c2b1a8b1f5c621a7268ca298598a15c4ac575790628651e5651925b5efd96ebc0046796ef5b1&token=570732653&lang=zh_CN#rd)
+
+> 下面主要讨论的是IO就绪后的流程，BIO/NIO/多路复用主要讨论的是等待IO就绪的阶段
 
 ### 传统IO
 
@@ -1040,7 +1138,19 @@ public static void main(String[] args) throws IOException {
 }
 ```
 
+#### SocketChannel
+
+服务端：ServerSocketChannel；客户端：SocketChannel
+
+可以看作是Socket的再一层抽象，在Socket的基础上封装了一些其他的内容
+
 ### Selector
+
+**多路复用器**
+
+Linux下默认为epoll，不过会判断内核版本，低版本为select或epoll；基本所有操作系统都支持select
+
+> windows下的AIO，即IOCP没有支持，因为考虑到Java程序大多跑在Linux服务器上
 
 #### 概述
 
@@ -1049,7 +1159,216 @@ public static void main(String[] args) throws IOException {
 - 能够检测多个注册的通道上是否有事件发生，如果有，便获取对应事件并处理
 - 不必为每个连接都创建一个线程，减少了多线程上下文切换导致的开销
 
+#### 关键代码
 
+```java
+select(); // 阻塞调用select/poll/epoll
+select(long timeout); // 阻塞直到超时
+selectNow(); // 有无事件产生都直接返回
+```
+
+```java
+// 返回所有向多路复用器注册的SelectionKey
+keys(); 
+// 返回所有产生事件对应的SelectionKey
+selectedKey(); 
+```
+
+> SelectionKey：
+>
+> ```java
+> public abstract class SelectionKey {
+>     protected SelectionKey() { }
+>     // 返回channel，理解成socket，或fd
+>     public abstract SelectableChannel channel();
+>     // 返回多路复用器
+>     public abstract Selector selector();
+>     // 取消一个selectionKey并添加到cancelled-key set 中
+>     // 所关联的channel并没有立即被撤销注册
+>     // 直到发生下次 select, 这些channel才被从selector中撤销登记
+>     public abstract void cancel();
+>     // 返回要监听的事件类型
+>     public abstract int interestOps();
+>     // 设置要监听的事件类型
+>     public abstract SelectionKey interestOps(int ops);
+>     // 或操作
+>     public int interestOpsOr(int ops) {
+>         synchronized (this) {
+>             int oldVal = interestOps();
+>             interestOps(oldVal | ops);
+>             return oldVal;
+>         }
+>     }
+>     // 与操作
+>     public int interestOpsAnd(int ops) {
+>         synchronized (this) {
+>             int oldVal = interestOps();
+>             interestOps(oldVal & ops);
+>             return oldVal;
+>         }
+>     }
+> 	// 就绪的事件的类型
+>     public abstract int readyOps();
+> 
+>     public static final int OP_READ = 1 << 0;
+>     public static final int OP_WRITE = 1 << 2;
+>     public static final int OP_CONNECT = 1 << 3;
+>     public static final int OP_ACCEPT = 1 << 4;
+>     // 读事件是否发生
+>     public final boolean isReadable() {
+>         return (readyOps() & OP_READ) != 0;
+>     }
+> 	// 写事件是否发生
+>     public final boolean isWritable() {
+>         return (readyOps() & OP_WRITE) != 0;
+>     }
+> 	// 连接事件是否发生
+>     public final boolean isConnectable() {
+>         return (readyOps() & OP_CONNECT) != 0;
+>     }
+> 	// accept是否发生
+>     public final boolean isAcceptable() {
+>         return (readyOps() & OP_ACCEPT) != 0;
+>     }
+> 
+>     // -- Attachments --
+> 
+>     private volatile Object attachment;
+>     private static final AtomicReferenceFieldUpdater<SelectionKey,Object>
+>         attachmentUpdater = AtomicReferenceFieldUpdater.newUpdater(
+>             SelectionKey.class, Object.class, "attachment"
+>         );
+>     public final Object attach(Object ob) {
+>         return attachmentUpdater.getAndSet(this, ob);
+>     }
+>     public final Object attachment() {
+>         return attachment;
+>     }
+> 
+> }
+> ```
+>
+> 实例SelectionKeyImpl：
+>
+> ```java
+> public final class SelectionKeyImpl
+>     extends AbstractSelectionKey
+> {
+>     private static final VarHandle INTERESTOPS =
+>             ConstantBootstraps.fieldVarHandle(
+>                     MethodHandles.lookup(),
+>                     "interestOps",
+>                     VarHandle.class,
+>                     SelectionKeyImpl.class, int.class);
+> 
+>     // 连接句柄
+>     private final SelChImpl channel;
+>     private final SelectorImpl selector;
+> 
+>     // 监听的事件
+>     private volatile int interestOps;
+>     // 返回的事件，看到这里，感觉跟pollfd或者epoll_event的结构挺像的
+>     private volatile int readyOps;
+> 
+>     // registered events in kernel, used by some Selector implementations
+>     private int registeredEvents;
+> 
+>     // index of key in pollfd array, used by some Selector implementations
+>     private int index;
+>     //......
+> }
+> ```
+>
+> 可以简单在抽象层面对标一下：
+>
+> - 对标select中的fd_set和对应位置置为1的文件描述符（已产生的事件+fd）
+> - poll中的revents不为空的pollfd
+> - 以及epoll就绪链表中的epoll_event（感觉这个最贴切）
+
+### Java多路复用实现
+
+```java
+public class Demo {
+    public static void main(String[] args) throws IOException {
+        // 创建多路复用器
+        Selector selector = Selector.open();
+        // 将服务端的ServerSocket注册到多路复用器，并监听accept事件
+        ServerSocketChannel ss = ServerSocketChannel.open();
+        ss.bind(new InetSocketAddress(9090));
+        // 设置为非阻塞
+        ss.configureBlocking(false);
+        // 注册
+        ss.register(selector, SelectionKey.OP_ACCEPT);
+        while (true){
+            // 阻塞，如果监听到有事件发生，进入if循环
+            if (selector.select() > 0){
+                // 遍历就绪链表
+                for (SelectionKey k: selector.selectedKeys()){
+                    // 发现accept事件状态显示就绪
+                    if (k.isAcceptable()){
+                        // 拿到注册为accept的ServerSocket句柄
+                        ServerSocketChannel readySs = (ServerSocketChannel) k.channel();
+                        // 开始监听，这里是一开始就设置了非阻塞的
+                        SocketChannel accept = readySs.accept();
+                        // 监听到客户端连接
+                        if (accept != null){
+                            System.out.println("------------------------------");
+                            System.out.println("TYPE: ACCEPT");
+                            System.out.println("客户端地址为: " + accept.getRemoteAddress());
+                            // 客户端channel设置为非阻塞
+                            accept.configureBlocking(false);
+                            // 将客户端channel注册到多路复用器，并监听读状态
+                            accept.register(selector, SelectionKey.OP_READ);
+                        }
+                    }else if (k.isReadable()){
+                        // 客户端channel读事件产生
+                        SocketChannel readyCs = (SocketChannel) k.channel();
+                        ByteBuffer buffer = ByteBuffer.allocate(1024);
+                        int read = readyCs.read(buffer);
+                        if (read > 0){
+                            System.out.println("------------------------------");
+                            System.out.println("TYPE: READ, 输入来源为: " + readyCs.getRemoteAddress());
+                            // 注意直接内存不支持array()方法
+                            System.out.println(new String(buffer.array(), 0, read));
+                        }
+                    }
+                    selector.selectedKeys().clear();
+                }
+            }
+        }
+    }
+}
+```
+
+![image-20211211031528967](imgs\netty\39.png)
+
+注意的点：
+
+- 需要写成非阻塞的，否则会抛出异常
+
+  > why？
+  >
+  > 每次通过 `read` 系统调用读取数据时，最多只能读取缓冲区大小的字节数；如果某个文件描述符一次性收到的数据超过了缓冲区的大小，那么需要对其 `read` 多次才能全部读取完毕
+  >
+  > - **`select`** **可以使用阻塞 I/O**。通过 `select` 获取到所有可读的文件描述符后，遍历每个文件描述符，`read` **一次**数据
+  >   - 这些文件描述符都是可读的，因此即使 `read` 是阻塞 I/O，也一定可以读到数据，不会一直阻塞下去
+  >   - `select` 采用水平触发模式，因此如果第一次 `read` 没有读取完全部数据，那么下次调用 `select` 时依然会返回这个文件描述符，可以再次 `read`
+  >   - **`select`** **也可以使用非阻塞 I/O**。当遍历某个可读文件描述符时，使用 `for` 循环调用 `read` **多次**，直到读取完所有数据为止（返回 `EWOULDBLOCK`）。这样做会多一次 `read` 调用，但可以减少调用 `select` 的次数
+  >
+  > - 在 `epoll` 的边缘触发模式下，只会在文件描述符的可读/可写状态发生切换时，才会收到操作系统的通知
+  >   - 因此，如果使用 `epoll` 的**边缘触发模式**，在收到通知时，**必须使用非阻塞 I/O，并且必须循环调用** `read` **或** `write` **多次，直到返回** `EWOULDBLOCK` **为止**，然后再调用 `epoll_wait` 等待操作系统的下一次通知
+  >   - 如果没有一次性读/写完所有数据，那么在操作系统看来这个文件描述符的状态没有发生改变，将不会再发起通知，调用 `epoll_wait` 会使得该文件描述符一直等待下去，服务端也会一直等待客户端的响应，业务流程无法走完
+  >   - 这样做的好处是每次调用 `epoll_wait` 都是**有效**的——保证数据全部读写完毕了，等待下次通知。在水平触发模式下，如果调用 `epoll_wait` 时数据没有读/写完毕，会直接返回，再次通知。因此边缘触发能显著减少事件被触发的次数
+  >
+  >   为什么 `epoll` 的**边缘触发模式不能使用阻塞 I/O**？很显然，边缘触发模式需要循环读/写一个文件描述符的所有数据。如果使用阻塞 I/O，那么一定会在最后一次调用（没有数据可读/写）时阻塞，导致无法正常结束
+
+- 每次读取selectedKeys并IO操作后，需要clear
+
+  > why？
+  >
+  > selector无法自己移除selectedKey，若没有移除的话，下次遍历还会遍历到对应的selectedKey，取出channel，进行IO操作，而此时channel是没有就绪的，则程序就会出现异常
+  >
+  > 以上面的例子为例，如果第一次accept之后没有清除，首先轮询到刚刚添加的read，如果可read，则read出来；如果还不可，进入下一次循环，阻塞在select。接着，另一个连接开启，进入循环，然而由于上一个accept的key没有清除，于是遍历到上一个accept，判断监听结果为null，进入下一次循环，新的accept就完全没有被处理，类似于{old accept, read, accept}，旧的accept覆盖掉了本应该对新的accept进行的操作，导致后面一系列混乱
 
 # 参考
 
@@ -1060,3 +1379,6 @@ public static void main(String[] args) throws IOException {
 - [https://www.zhihu.com/question/57374068](https://www.zhihu.com/question/57374068)
 - [https://www.cnblogs.com/baxianhua/p/9285102.html](https://www.cnblogs.com/baxianhua/p/9285102.html)
 - [https://blog.csdn.net/Stephen___Qin/article/details/120466415](https://blog.csdn.net/Stephen___Qin/article/details/120466415)
+- [https://blog.csdn.net/wangwei19871103/article/details/104080859](https://blog.csdn.net/wangwei19871103/article/details/104080859)
+- [https://www.cnblogs.com/Anker/p/3265058.html](https://www.cnblogs.com/Anker/p/3265058.html)
+- :star:[马士兵Netty](https://www.bilibili.com/video/BV1Af4y117ZK?p=1&spm_id_from=pageDriver)
