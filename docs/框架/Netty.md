@@ -1450,10 +1450,17 @@ class Task implements Runnable{
             ByteBuffer buffer = ByteBuffer.allocate(1);
             int read;
             System.out.println("----------READ----------");
-            System.out.println("线程: " + Thread.currentThread().getName());
+            System.out.println("源: " + readChannel.getRemoteAddress());
+            System.out.println("处理线程: " + Thread.currentThread().getName());
             while (true){
                 buffer.clear();
-                if ((read = readChannel.read(buffer)) <= 0){
+                if ((read = readChannel.read(buffer)) == 0){
+                    break;
+                }
+                if (read < 0){
+                    // 连接断开，取消注册
+                    sk.cancel();
+                    System.out.print("连接断开: " + readChannel.getRemoteAddress());
                     break;
                 }
                 System.out.print(new String(buffer.array(), 0, read, "UTF-8"));
@@ -1465,7 +1472,10 @@ class Task implements Runnable{
 }
 ```
 
-> :boom:!!!**注意**：register一定要在没有阻塞在select时调用，否则会失效。可以使用一个带超时的select
+> :boom:!!!**注意**：
+>
+> 1. register一定要在没有阻塞在select时调用，否则会失效。可以使用一个带超时的select
+> 2. 如果客户端强制断开，注册在 selector 中的 channel 会不断触发 read 事件，此时调用 read() 方法去读数据会触发 IOException 异常，因此需要通过 try catch 捕捉处理，避免服务器因为异常而被强制停止。需要调用 cancel() 方法进行注销，从 selector 中注销触发异常 SelectionKey 所对应的 channel
 
 正常运行：
 
