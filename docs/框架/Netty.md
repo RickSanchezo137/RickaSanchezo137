@@ -372,7 +372,7 @@ while (true){
 
 ![image-20211210014721230](imgs\netty\31.png)
 
-设想一下，每次需要轮询所有的channel，假如有10000个连接，就需要轮询10000次，进行10000次系统调用，开销非常大，如果只有一个channel有效，其他9999次都是浪费的。能不能有一种方法，针对有效的channel进行一次recv系统调用，然后针对其他所有的9999个channel，只发起一次内核系统调用，总共只有两次系统调用，这，就是**多路复用**
+设想一下，每次需要轮询所有的channel，假如有10000个连接，就需要轮询10000次，进行10000次系统调用，开销非常大，如果只有一个channel有效，则其他9999次都是浪费的。有一种方法，能够针对有效的channel进行一次recv系统调用，然后针对其他所有的9999个channel，只发起一次系统调用，总共只有两次系统调用，这，就是**多路复用**
 
 ### 3、IO 复用模型（IO multiplexing）
 
@@ -1285,7 +1285,9 @@ selectedKey();
 > - poll中的revents不为空的pollfd
 > - 以及epoll就绪链表中的epoll_event（感觉这个最贴切）
 
-### Java多路复用实现
+## Netty思想
+
+### Java多路复用简单实现
 
 ```java
 public class Demo {
@@ -1368,7 +1370,106 @@ public class Demo {
   >
   > selector无法自己移除selectedKey，若没有移除的话，下次遍历还会遍历到对应的selectedKey，取出channel，进行IO操作，而此时channel是没有就绪的，则程序就会出现异常
   >
-  > 以上面的例子为例，如果第一次accept之后没有清除，首先轮询到刚刚添加的read，如果可read，则read出来；如果还不可，进入下一次循环，阻塞在select。接着，另一个连接开启，进入循环，然而由于上一个accept的key没有清除，于是遍历到上一个accept，判断监听结果为null，进入下一次循环，新的accept就完全没有被处理，类似于{old accept, read, accept}，旧的accept覆盖掉了本应该对新的accept进行的操作，导致后面一系列混乱
+  > 以上面的例子为例，如果第一次accept之后没有清除，首先轮询到刚刚添加的read，如果可read，则read出来；如果还不可，进入下一次循环，阻塞在select。接着，另一个连接开启，进入循环，然而由于上一个accept的key没有清除，于是遍历到上一个accept，监听已经建立的连接的客户端channel，所以导致后面一系列混乱
+
+考虑出现这样的情况：某次发生一个读事件，如果内容很多，又是在while循环里面读取的话，就会在卡在循环里面直到读取完成，如果读取过程中有accept事件发生，则这个客户端也得等，更别说客户端传来的数据读取了
+
+思考这样的解决：开启多个selector，一个selector卡在读取那儿时，另一个可以工作。进一步地，令一个selector完全用于监听accept事件，另外的selector，处理其他类型的事件，下面来简单实现一下
+
+### Java多selector实现
+
+> 设计成主线程的selector完全用于监听accpet，其他用于处理其他事件
+
+主线程做accpect工作，每次监听到一个客户端，将客户端的读取事件注册到selector1和selector2其中随机一个
+
+```java
+public class Demo {
+    static volatile Selector selectorAccept = null;
+    static volatile Selector selectorRead1 = null;
+    static volatile Selector selectorRead2 = null;
+    static volatile Selector[] selectorReads = null;
+    public static void main(String[] args) throws IOException {
+        selectorAccept = Selector.open();
+        selectorRead1 = Selector.open();
+        selectorRead2 = Selector.open();
+        selectorReads = new Selector[]{selectorRead1, selectorRead2};
+        ServerSocketChannel ss = ServerSocketChannel.open();
+        ss.bind(new InetSocketAddress(9090));
+        ss.configureBlocking(false);
+        ss.register(selectorAccept, SelectionKey.OP_ACCEPT);
+        new Thread(new Task(selectorRead1), "thread-A").start();
+        new Thread(new Task(selectorRead2), "thread-B").start();
+        // 开始监听accept
+        while (true) {
+            synchronized (selectorAccept) {
+                if (selectorAccept.select() > 0) {
+                    for (SelectionKey sk : selectorAccept.selectedKeys()) {
+                        if (sk.isAcceptable()) {
+                            ServerSocketChannel ssc = (ServerSocketChannel) sk.channel();
+                            SocketChannel accept = ssc.accept();
+                            if (accept != null) {
+                                System.out.println("----------ACCEPT----------");
+                                System.out.println("线程: " + Thread.currentThread().getName());
+                                System.out.println("新的客户端来了: " + accept.getRemoteAddress());
+                                accept.configureBlocking(false);
+                                int random = new Random().nextInt(2);
+                                accept.register(selectorReads[random], SelectionKey.OP_READ);
+                            }
+                        }
+                    }
+                    selectorAccept.selectedKeys().clear();
+                }
+            }
+        }
+    }
+}
+class Task implements Runnable{
+    private final Selector selector;
+
+    public Task(Selector selector) {
+        this.selector = selector;
+    }
+
+    @Override
+    public void run() {
+        synchronized (selector){
+            while (true){
+                try {
+                    if (selector.select(200) > 0) {
+                        handler(selector);
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+    static void handler(Selector selectorRead) throws IOException {
+        for (SelectionKey sk: selectorRead.selectedKeys()){
+            SocketChannel readChannel = (SocketChannel) sk.channel();
+            ByteBuffer buffer = ByteBuffer.allocate(1);
+            int read;
+            System.out.println("----------READ----------");
+            System.out.println("线程: " + Thread.currentThread().getName());
+            while (true){
+                buffer.clear();
+                if ((read = readChannel.read(buffer)) <= 0){
+                    break;
+                }
+                System.out.print(new String(buffer.array(), 0, read, "UTF-8"));
+            }
+            System.out.println();
+        }
+        selectorRead.selectedKeys().clear();
+    }
+}
+```
+
+> :boom:!!!**注意**：register一定要在没有阻塞在select时调用，否则会失效。可以使用一个带超时的select
+
+正常运行：
+
+![image-20211213105607078](imgs\netty\40.png)
 
 # 参考
 
