@@ -414,6 +414,8 @@ while (true){
 > :star2:这里有一个写得很清晰易懂的博客：[https://blog.csdn.net/wangwei19871103/article/details/104080859](https://blog.csdn.net/wangwei19871103/article/details/104080859)
 >
 > :star:源码级解析：[https://www.cnblogs.com/Anker/p/3265058.html](https://www.cnblogs.com/Anker/p/3265058.html)
+>
+> :star::star:源码级解析：[https://www.cnblogs.com/200911/p/7016843.html](https://www.cnblogs.com/200911/p/7016843.html)
 
 设想一下，在NIO模式下，每次需要轮询所有的channel，假如有10000个连接，就需要轮询10000次，进行10000次系统调用，开销非常大，如果只有一个channel有效，其他9999次都是浪费的。能不能有一种方法，针对有效的channel进行一次recv系统调用，然后针对其他所有的9999个channel，只发起一次内核系统调用，总共只有两次系统调用，这，就是**多路复用**
 
@@ -423,13 +425,15 @@ while (true){
 
 **同步的IO多路复用器**
 
+### 细节
+
 `man (2) select`：（2表示系统调用，可用`man man`查看）
 
 ![image-20211210030513430](imgs\netty\32.png)
 
 > - nfds：所有已注册的最大文件描述符 + 1
 >
->   遍历小于该值的值，就能遍历到所有文件描述符。会一次性将内存描述符从用户态拷贝到内核态
+>   遍历小于该值的值，就能遍历到所有文件描述符。会一次性将文件描述符从用户态拷贝到内核态
 >
 > - 可读集合
 >
@@ -452,6 +456,25 @@ while (true){
   > 状态的返回是通过将fd_set拷贝到用户空间
 
 弊端：在nfds大的情况下：① 将nfds拷贝到内核态的大开销；② 内核遍历的大开销；③ 只支持1024个，太小了，若要增加，除非修改源码并重新编译内核；④ 调用select后，根据返回值 > 0能够判断发生了事件，但具体不知道是哪里发生了什么事件，必须遍历每个fd_set的每一位，确定哪一位为1，这一位的索引位置就是文件描述符，再令程序进行IO操作
+
+### 流程简析
+
+> 参考：
+>
+> - [https://www.cnblogs.com/zengzy/p/5113910.html](https://www.cnblogs.com/zengzy/p/5113910.html)
+> - [https://baijiahao.baidu.com/s?id=1710440642419184726&wfr=spider&for=pc](https://baijiahao.baidu.com/s?id=1710440642419184726&wfr=spider&for=pc)
+> - [https://www.cnblogs.com/tomato0906/articles/7590746.html](https://www.cnblogs.com/tomato0906/articles/7590746.html)
+
+1. 调用select，os将select()的参数拷贝进内核，即所有的文件描述符拷贝进内核
+2. 底层执行do_select，遍历所有0~nfds-1的文件描述符；对每个文件描述符，调用所属的驱动程序的poll函数，做了两件事：
+   - 将当前线程挂到文件描述符的等待队列上（Linux中等待队列是和文件一一对应的）
+   - 判断对应socket上是否有事件发生，并将结果标记在返回值上
+3. 遍历一遍后
+   - 如果某个驱动上面有事件发生，则返回，并将fd_set从内核态拷贝到用户态，供用户处理
+   - 如果都没有事件，则线程进入阻塞
+     - 当某个驱动上有数据到来，发生中断，中断程序会唤醒对应等待队列中的线程，重新开始do_select中的循环，如果有数据，则在fd_set中记录下结果，最后，将该线程从所有等待队列中移除，返回结果
+     - 当阻塞到达超时时间后，也会重启循环
+4. 用户遍历三个fd_set，根据对应位置找到文件描述符，并作相应处理
 
 ## poll
 
@@ -501,9 +524,11 @@ poll的实现和select非常相似，只是描述fd集合的方式不同，poll�
 
 ## epoll
 
+### 细节
+
 ![image-20211210162320729](imgs\netty\36.png)
 
-> 返回epoll句柄，创建红黑树，用于存放fd
+> 返回epoll句柄，创建红黑树，用于存放fd（用epitem包装）
 
 ![image-20211210112417854](imgs\netty\34.png)
 
@@ -534,6 +559,40 @@ select和poll都只提供了一个函数——select或者poll函数。而epoll�
 > epoll_wait在没有事件发生，即就绪链表为空时会阻塞，不过可以设置超时时间
 >
 > select/poll在内核遍历时会阻塞直到事件发生，这期间内核会不断循环遍历，同样可以设置超时时间，下次调用依然要重新遍历，而epoll只需要调用epoll_wait取，是接近O(1)的
+
+### 流程简析
+
+> 参考：
+>
+> - [https://www.coonote.com/network-note/epoll-principle.html](https://www.coonote.com/network-note/epoll-principle.html)
+> - :star::star: [https://zhuanlan.zhihu.com/p/361750240](https://zhuanlan.zhihu.com/p/361750240)
+>
+> ![img](imgs\netty\41.png)
+
+1. 调用epoll_create，在内核中创建一个eventpoll的实例，包括rdr（红黑树头节点），wait_queue（存放调用epoll_wait的线程），rdllist（存放已就绪的epitem）
+2. 每次注册一个连接，epoll_ctl将socket的ffd（fd→file实例（struct file）→socket，ffd→file实例→socket，但两者是不同的指针）和wq指针、event_poll指针等封装成epitem
+   - 首先将epitem添加到对应socket的等待队列中，令socket等待队列项中的private项指向null（不指向线程，表示唤醒工作不再与socket绑定，而是全权交给epoll管理）
+   - 接着将回调函数ep_poll_callback注册到内核中断程序中，并在socket对应等待队列中令func项指向它
+   - 通过ep指针找到event_poll实例，再找到红黑树，判断是否已存在该socket，不存在则添加
+3. 调用epoll_wait时，通过event_poll找到rdllist
+   - 如果不为空，则取出epitem并处理
+   - 如果为空，则加入wq中，并将自己阻塞起来
+4. 当某socket有事件到来时，调用对应等待队列中的func也就是ep_poll_callback函数
+   - 将等待队列中的epitem从红黑树rdr移到就绪链表rdllist
+   - 根据epitem找到wq，查看是否有阻塞的线程，唤醒它
+
+## 水平触发和边缘触发
+
+> 参考：[https://blog.csdn.net/daaikuaichuan/article/details/83862311?ops_request_misc=%257B%2522request%255Fid%2522%253A%2522164000455316780264098548%2522%252C%2522scm%2522%253A%252220140713.130102334.pc%255Fall.%2522%257D&request_id=164000455316780264098548&biz_id=0&utm_medium=distribute.pc_search_result.none-task-blog-2~all~first_rank_ecpm_v1~rank_v31_ecpm-2-83862311.pc_search_result_cache&utm_term=epoll%E5%8E%9F%E7%90%86&spm=1018.2226.3001.4187](https://blog.csdn.net/daaikuaichuan/article/details/83862311?ops_request_misc=%257B%2522request%255Fid%2522%253A%2522164000455316780264098548%2522%252C%2522scm%2522%253A%252220140713.130102334.pc%255Fall.%2522%257D&request_id=164000455316780264098548&biz_id=0&utm_medium=distribute.pc_search_result.none-task-blog-2~all~first_rank_ecpm_v1~rank_v31_ecpm-2-83862311.pc_search_result_cache&utm_term=epoll%E5%8E%9F%E7%90%86&spm=1018.2226.3001.4187)
+
+epoll有EPOLLLT和EPOLLET两种触发模式，LT是默认的模式，ET是“高速”模式。
+
+- LT（水平触发）模式下，只要这个文件描述符还有数据可读，每次 epoll_wait都会返回它的事件，提醒用户程序去操作；
+- ET（边缘触发）模式下，在它检测到有 I/O 事件时，通过 epoll_wait 调用会得到有事件通知的文件描述符，对于每一个被通知的文件描述符，如可读，则必须将该文件描述符一直读到空，让 errno 返回 EAGAIN 为止，否则下次的 epoll_wait 不会返回余下的数据，会丢掉事件。如果ET模式不是非阻塞的，那这个一直读或一直写势必会在最后一次阻塞。
+
+【epoll为什么要有EPOLLET触发模式？】：
+
+  如果采用EPOLLLT模式的话，系统中一旦有大量你不需要读写的就绪文件描述符，它们每次调用epoll_wait都会返回，这样会大大降低处理程序检索自己关心的就绪文件描述符的效率.。而采用EPOLLET这种边缘触发模式的话，当被监控的文件描述符上有可读写事件发生时，epoll_wait()会通知处理程序去读写。如果这次没有把数据全部读写完(如读写缓冲区太小)，那么下次调用epoll_wait()时，它不会通知你，也就是它只会通知你一次，直到该文件描述符上出现第二次可读写事件才会通知你！！！这种模式比水平触发效率高，系统不会充斥大量你不关心的就绪文件描述符
 
 # Java NIO
 
