@@ -652,17 +652,17 @@ transient Node<K,V>[] table;
 
 ```java
 static class Node<K,V> implements Map.Entry<K,V> {
-        final int hash;
-        final K key;
-        V value;
-        Node<K,V> next;
+    final int hash;
+    final K key;
+    V value;
+    Node<K,V> next;
 
-        Node(int hash, K key, V value, Node<K,V> next) {
-            this.hash = hash;
-            this.key = key;
-            this.value = value;
-            this.next = next;
-        }
+    Node(int hash, K key, V value, Node<K,V> next) {
+        this.hash = hash;
+        this.key = key;
+        this.value = value;
+        this.next = next;
+    }
     ......
 }
 ```
@@ -983,7 +983,7 @@ final void treeifyBin(Node<K,V>[] tab, int hash) {
 
 线程同时put，后面的覆盖的前面的，且由于判定索引处为null，所以不会返回旧值
 
-在并发条件下，第一个线程判断桶中无元素，则new一个新节点，但此时该线程被挂起。然后另一个线程直接在此处放了一个新节点进去，然后线程1被唤醒后，不知道此位置已经有新元素了，会直接放数据进去，此时会将原来线程放的数据覆盖
+例如：在并发条件下，第一个线程判断桶中无元素，则new一个新节点，但此时该线程被挂起。然后另一个线程直接在此处放了一个新节点进去，然后线程1被唤醒后，不知道此位置已经有新元素了，会直接放数据进去，此时会将原来线程放的数据覆盖；还有++size的时候
 
 [链接](https://blog.csdn.net/swpu_ocean/article/details/88917958?utm_medium=distribute.pc_relevant.none-task-blog-2~default~BlogCommendFromMachineLearnPai2~default-2.control&depth_1-utm_source=distribute.pc_relevant.none-task-blog-2~default~BlogCommendFromMachineLearnPai2~default-2.control)
 
