@@ -962,7 +962,7 @@ final void treeifyBin(Node<K,V>[] tab, int hash) {
 
 1. **7中初始化时就创建底层数组，8中put时调用resize方法时才创建**
 2. **7中底层为Entry数组，8中为Node数组**
-3. **8中链表深度超阈值会转换成红黑树，Node→TreeNode，7中不会**
+3. **8中链表深度超阈值会转换成红黑树，Node→TreeNode，7中不会**（resize中对头结点操作时，如果判断为TreeNode，即e instanceof TreeNode，会调用split方法，当节点数小于等于6时，会从头结点开始进行树的退化，退化成链表）
 4. **7中threshold初始化时就等于cap * loadFacotor，8中初始化时会先根据initialCapacity计算threshold=2^n，在resize的时候才会令threshold = cap * loadFactor**
 5. **扰动函数不一致，8中较简洁**
 6. 7中会使用useAltHashing结合hashSeed和StringHashing32方法在扩容时优化哈希，8中去掉了这个
