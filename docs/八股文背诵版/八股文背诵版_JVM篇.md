@@ -18,7 +18,7 @@ JVM主要由类加载子系统、执行引擎、运行时数据区和本地方�
 
 其中类加载子系统用于将二进制Class文件或运行过程中动态生成的字节码加载到内存中去，主要包括类的装载，链接、初始化这三个步骤；执行引擎主要用于对字节码文件采用模板解释器进行逐行解释；运行时数据区用于存放Java运行过程中的各种数据及结构；本地方法接口用于在Java程序内调用本地方法
 
-![JVM架构](imgs\JVM\1.png)
+<img src="imgs\JVM\1.png" alt="JVM架构" style="zoom: 67%;" />
 
 :point_right:**讲一下运行时数据区？**
 
@@ -26,7 +26,7 @@ JVM主要由类加载子系统、执行引擎、运行时数据区和本地方�
 
 运行时数据区用于存放Java程序运行过程中的各种数据及数据结构，主要包括堆、虚拟机栈、本地方法栈、程序计数器以及方法区这几个组成部分
 
-- 堆是线程共享的区域，主要用于存放Java中的各种实例对象，创建新对象的内存都是在堆上分配的
+- 堆是线程共享的区域，主要用于存放Java中的各种实例对象，创建新对象的内存**几乎**都是在堆上分配的
 
 - 虚拟机栈是线程私有的，主要用于方法的调用，每次方法调用，对应产生一个虚拟机栈中的栈帧，一个栈桢包括局部变量表、操作数栈、动态链接、方法返回地址
 
@@ -65,11 +65,101 @@ PC寄存器需要保存线程执行到哪一条指令了，线程在执行过程
 
 :point_right:**java类加载过程？**
 
-java类加载包括三个步骤，类的装载、链接和初始化。其中装载是将二进制Class文件或动态生成的字节码加载到内存当中，将静态结构转换成内存中运行的数据结构，并且在堆中生成一个对应的Class对象。链接包括验证、准备和解析，验证阶段会对字节码的合法性进行校验，包括魔数头校验等等；准备阶段会对类变量进行零值初始化，解析阶段会将部分常量池中的符号引用转换成直接引用；初始化阶段会调用\<clinit>方法对类变量进行显式初始化并执行静态代码块
+java类加载包括三个步骤，类的装载、链接和初始化。其中装载是根据类的全限定名将二进制Class文件或动态生成的字节码加载到内存当中，将静态结构转换成内存中运行的数据结构，并且在堆中生成一个对应的Class对象。链接包括验证、准备和解析，验证阶段会对字节码的合法性进行校验，包括魔数头校验等等；准备阶段会对类变量进行零值初始化，解析阶段会将部分常量池中的符号引用转换成直接引用；初始化阶段会调用\<clinit>方法对类变量进行显式初始化并执行静态代码块
 
+:point_right:**java有哪几种类加载器？**
 
+1. BootstrapClassloader，即启动类加载器，是最顶层的一个加载器，负责加载java的核心类库，即%JAVA_HOME%/jre/lib路径或
+
+   `-Xbootclasspath`指定的路径下的jar包，比如rt.jar
+
+2. ExtClassLoader，扩展类加载器，用来加载%JAVA_HOME%/jre/lib/ext路径或-Djava.ext.dirs指定路径下的jar包
+
+3. AppClassLoader，应用类加载器，用来加载Classpath路径下或-Djava.class.path指定路径下的jar包或Class文件
+
+4. 用户自定义类加载器，通过继承java.lang.ClassLoader来实现
+
+:point_right:**讲一下双亲委派机制模型？**
+
+当一个类加载器接收到加载一个类的请求，首先不会自己去加载这个类，而是先委托给父类的加载器进行加载，最终所有的请求都会被传达到启动类加载器，只有发现当父类加载器无法实现加载的时候，子类才会去尝试加载该类
+
+> 扩展：JDK9后会先进行模块化加载。加载一个类时，首先根据类名找到所在的模块，再使用模块对应的类加载器进行加载，通过这样的手段，能够大大减小Java程序打包的体积，比如将rt.jar拆分成多个模块。同时大大提高加载效率
+>
+> 只有找不到对应模块时，才会调用双亲委派机制来加载
+
+:point_right:**双亲委派机制作用？**
+
+是Java的沙箱安全机制，首先可以防止类被重复加载，父类能加载，子类就不必加载；其次可以防止核心类库被任意覆盖，比如对于核心类库来说，我们肯定希望Java程序在各个环境下加载的都是同一个核心类，如果没有安全委派机制，用户命名一个同名的类，然后用自己的类加载器加载，造成程序中出现多个同名但不相同的类，造成混乱
+
+:point_right:**讲一下双亲委派机制破坏？**
+
+通过继承ClassLoader类并重写loadClass方法来破环。原生的loadClass方法首先会调用findLoadedClass(String name)方法检查类是否被加载，如果没有，则递归调用parent.loadClass方法，如果parent为null，就到了启动类加载器了，就会使用启动类加载器加载，如果父类加载失败返回null，则会由子类逐层调用findClass方法，在findClass中如果找到对应字节码资源，则调用defineClass方法字节码转换成Class对象并返回，实现加载，这就是双亲委派的逻辑。因此，打破双亲委派一定要重写loadClass方法
+
+```java
+protected Class<?> loadClass(String name, boolean resolve)
+    throws ClassNotFoundException
+{
+    synchronized (getClassLoadingLock(name)) {
+        Class<?> c = findLoadedClass(name);
+        if (c == null) {
+            long t0 = System.nanoTime();
+            try {
+                if (parent != null) {
+                    c = parent.loadClass(name, false);
+                } else {
+                    c = findBootstrapClassOrNull(name);
+                }
+            } catch (ClassNotFoundException e) {
+            }
+
+            if (c == null) {
+                long t1 = System.nanoTime();
+                c = findClass(name);
+
+                sun.misc.PerfCounter.getParentDelegationTime().addTime(t1 - t0);
+                sun.misc.PerfCounter.getFindClassTime().addElapsedTimeFrom(t1);
+                sun.misc.PerfCounter.getFindClasses().increment();
+            }
+        }
+        if (resolve) {
+            resolveClass(c);
+        }
+        return c;
+    }
+}
+```
+
+> 如果要正常实现一个满足双亲委派的自定义类加载器，只需要重写findClass方法就好。调用父类的loadClass最终都会调用到这个findClass方法
 
 ## GC
+
+:point_right:**什么是GC？**
+
+在Java程序中，程序员并不需要手动去进行内存管理与垃圾回收，而是交给JVM来管理。JVM中有一个低优先级的垃圾回收线程，在内存不足时会启动垃圾回收过程来对无用的内存空间进行回收，有效防止了内存泄漏，降低了程序员的工作量
+
+:point_right:**GC原理？**
+
+首先JVM会申请一个Stop The World，对内存空间中的GC Roots进行枚举；接着基于GC Roots进行可达性分析，将GC Roots引用链上的对象标记为可达对象；对于不可达的对象，如果没有重写finalize方法，则直接回收，否则加入F-Queue队列，并由低优先级的Finalizer线程调用队列中对象的finalize方法；之后再判断对象是否可达，如果不可达，直接回收，如果可达，对象复活，但被标记为finalized状态，也就是已经调用过finalize的状态，下次GC时如果不可达，就直接回收
+
+:point_right:**你提到了GC Roots，什么是GC Roots？**
+
+GC Roots是一组当前时刻保持活跃的对象集合，一般包括虚拟机栈/本地方法栈中的引用指向的对象、静态变量指向的对象、常量指向的对象等等
+
+:point_right:**怎么判断对象能否被回收？**
+
+1. 引用计数法，有指向对象的引用，则计数加一，若不再指向它了，则计数减一，最后计数为0时则可以回收，缺点是无法解决循环引用的问题
+2. 可达性分析，会基于GC Roots进行可达性分析，不可达且未重写finalize方法的直接回收；重写了finalize方法的对象会被加入F-Queue队列中等待Finalizer线程调用它的finalize方法
+
+:point_right:**你知道哪些垃圾回收算法？**
+
+1. 标记清除算法，首先标记不可达对象，接着回收不可达对象的内存。优点是垃圾回收效率较高，缺点是会产生大量不好整理的内存碎片，不便于后续分配大对象
+2. 标记复制算法，将GC一次后的这一区域存活对象复制到另一个区域，并回收该区域所有内存空间，接着互换这两个空间的角色。优点是不产生内存碎片，缺点是会浪费多一份内存空间，复制并移动对象需要更改指向它的引用，如果存活对象多，则开销会很大
+3. 标记压缩算法，GC后将对象整理到整个内存区域的一边，使其保持连续性。优点在于不会浪费多一份内存空间，不会有内存碎片，缺点是对存活的对象都要在内存中进行整理，开销大
+4. 分代算法，根据对象的生命周期分为不同的代，比如Hotspot堆区的新生代、老年代，提高回收效率
+5. 分区算法，将内存区域分为若干个小的分区，以区为单位进行垃圾回收
+6. 增量收集，gc时用户线程和垃圾回收线程并发，减少用户线程停顿时间
+
+:point_right:**你知道哪些垃圾回收器？**
 
 
 
