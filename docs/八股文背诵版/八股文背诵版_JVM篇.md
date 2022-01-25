@@ -313,9 +313,13 @@ G1提供Young GC和Mixed GC
 
 
 
+
+
 ### :point_right:**讲一下JVM的异常表？**
 
+在Java程序被编译为字节码之后，它的每一个方法对应的Code属性中都有一个Exception Table，即异常表，Nr.为异常处理器序号，start pc和end pc指定了可能出现异常的代码段范围，handler pc指定了异常后跳转到哪里进行处理，catch type指出异常类型是什么
 
+程序出现异常后，会首先遍历异常表，如果找到对应范围的异常处理器，则对比异常类型是否一致或为表中的子类，如果匹配就跳转到handler pc相应位置执行异常处理
 
 ## 大厂真题
 
