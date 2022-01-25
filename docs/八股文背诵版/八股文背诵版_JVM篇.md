@@ -83,6 +83,44 @@ PC寄存器需要保存线程执行到哪一条指令了，线程在执行过程
 
 虚方法表是一个类似数组的结构，里面存储着方法相关的类似于方法签名、方法直接入口等信息。它在类加载的链接阶段的准备阶段之后创建，目的是为了加快方法查找效率。当调用一个方法时，可以根据对应的对象的虚方法表，遍历查找方法的直接入口，并完成动态链接，如果没有虚方法表，只能对应类的方法元数据中遍历搜索，效率就没有那么高。子父类相同方法在对应虚方法表中索引位置相同，重写会在子类的虚方法表对应索引位置实现覆盖
 
+### :point_right:**讲一下JIT？**
+
+Java是解释执行的，然而内置有JIT编译器，针对多次调用的方法和循环次数高的循环体等，可以直接编译成本地代码并存放在Code Cache当中，下次调用的时候直接去执行这个本地机器代码即可，大大提高了Java程序的执行效率
+
+具体过程是，对于多次调用的方法，有一个方法计数器，一段时间内计数超过一定阈值就会将这个方法交给JIT进行编译；如果这一段时间后没达到计数阈值，则当前计数减半，称为热度衰减，这段时间称为半衰周期。对于循环体，有回边计数器记录循环的次数，超过阈值就将循环体提交JIT编译，由于是在当前栈帧上进行的，又称为OSR编译（On Stack Replacement）
+
+### :point_right:**什么是动态单分派、静态多分派？**
+
+首先是静态多分派，也就是重载，是**编译期的行为**。编译过程中，会根据方法的调用者和方法参数确定选择invokevirtual指令后面跟的是哪一个方法，因为是根据两个宗量进行选择，所以Java语言的静态分派属于多分派
+
+对于动态单分派，是运行期间的行为，只根据调用者的类型来确定具体调用哪个方法，方法参数是编译期已经确定好的，在运行期不会对方法的选择过程产生任何影响，因此是动态单分派
+
+> 一个例子：
+>
+> ```java
+> // Boy extends People
+> // Apple、Banana extends Fruit
+> People boy = new Boy();
+> Fruit apple = new Apple();
+> Fruit banana = new Banana();
+> boy.eat(apple);
+> boy.eat(banana);
+> ```
+>
+> 静态多分派：确定People和Fruit
+>
+> ```sh
+> 26 invokevirtual #16 <People.eat : (LFruit;)V>
+> 29 aload_1
+> 30 aload_3
+> 31 invokevirtual #16 <People.eat : (LFruit;)V>
+> 34 return
+> ```
+>
+> 动态单分派：不管实际的方法类型apple和banana，只按编译时的fruit来
+>
+> ![image-20220125171658793](imgs\JVM\4.png)
+
 ## 类加载
 
 ### :point_right:**java类加载过程？**
@@ -258,7 +296,6 @@ full gc：
 G1提供Young GC和Mixed GC
 
 - Young GC全程是STW的，首先进行可达性分析并标记，接着采用复制算法将选择所有年轻代的region为cset，进行回收
-
 - Mixed GC分为global concurrent marking阶段和回收阶段，其中，YGC在eden满后触发，global concurrent marking在老年代占堆内存率达到`InitiatingHeapOccupancyPercent`触发，进行标记并收集各region的回收价值
   - global concurrent marking分为四个阶段
     - 首先是初始标记阶段，标记与GC Roots直接关联的引用，这是STW的，时间较短；这个过程与YGC的标记过程是复用的，因此，这一阶段往往伴随一次YGC
@@ -267,6 +304,18 @@ G1提供Young GC和Mixed GC
     - 最后是清理阶段，这个阶段将没有存活对象的region加入空闲region列表，并计算region的垃圾占比、回收价值
   - 然后是回收阶段，即evacuation阶段，根据标记阶段收集的信息，判断老年代垃圾占比是否超过`G1HeapWastePercent`，超过则进行Mixed GC回收，在存活对象比例小于`G1MixedGCLiveThresholdPercent`的region中选取小于`C1OldCSetRegionThresholdPercent`的若干个加入CSet，并进行复制回收，需要STW
 - 如果Mixed GC后老年代空间依旧不够新对象的分配，产生evacuation failure，则会退化成Serial Old GC进行Full GC
+
+### :point_right:**讲一下OOPMap？**
+
+
+
+### :point_right:**安全点和安全区域？**
+
+
+
+### :point_right:**讲一下JVM的异常表？**
+
+
 
 ## 大厂真题
 
