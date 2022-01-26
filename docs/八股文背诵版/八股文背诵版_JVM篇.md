@@ -307,6 +307,16 @@ G1提供Young GC和Mixed GC
 
 ### :point_right:**讲一下OOPMap？**
 
+> 参考：
+>
+> - [找出栈上的指针/引用 - Script Ahead, Code Behind - ITeye博客](https://www.iteye.com/blog/rednaxelafx-1044951)
+
+**先说结论：**OOPMap是GC过程中为了快速判断堆栈上某个数据是否为引用类型，而引入的映射表
+
+**再说细节：**
+
+GC过程中有个重要的部分是根节点枚举，一般是从虚拟机栈、本地方法栈、静态变量、常量中寻找指向堆中的引用，这个过程需要判断JVM堆栈中的数据是否为引用类型。判断是否为引用类型，出现过几种方式，保守式、半保守式、准确式
+
 
 
 ### :point_right:**安全点和安全区域？**
