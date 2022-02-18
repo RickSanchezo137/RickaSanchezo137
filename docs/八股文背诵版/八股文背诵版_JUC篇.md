@@ -201,7 +201,7 @@ synchronized是Java的关键字，可以用于修饰代码块，方法，用于�
 
 可见性在于Java规范规定某线程进入synchronized前需要令其他线程对应的共享变量失效，出来时需要令共享变量刷到主存，具体实现是通过给synchronized对应的字节码指令monitorenter和moniterexit处插入内存屏障实现的
 
-> 个人猜测待实证（汇编）：可见性具体实现是monitorenter和moniterexit在JVM源码中用到了底层的lock cmpxchg指令，而lock具有保证可见性和内存屏障的作用，因此是可见的
+> 个人猜测待实证（汇编）：可见性具体实现可能是因为monitorenter和moniterexit在JVM源码中用到了底层的lock cmpxchg指令，而lock具有保证可见性和内存屏障的作用，因此是可见的
 
 有序性在于monitorenter和monitorexit处插入的内存屏障，防止synchronized内部指令与外部指令重排序，同时as-if-serial保证了synchronized内部不会发生影响结果的重排序，可以看作是有序执行的
 
@@ -264,11 +264,30 @@ class Singleton{
 
 保证。首先，JMM规范中要求synchronized保证可见性，因此，在hotspot的实现中，monitorenter和monitorexit指令插入了内存屏障，可以保证可见性
 
+### :point_right:synchronized在代码块和方法中的区别？
+
 ### :point_right:锁升级？
 
-以前的synchronized是重量级锁，涉及到各种上下文切换
+以前的synchronized是重量级锁，涉及到各种上下文切换等，开销比较大，是比较“重”的锁。后面对synchronized进行了改进，有一个从偏向锁升级成轻量级锁升级成重量级锁的过程，大大提高了synchronized的效率
+
+具体细节是这样的，在Java中每一个对象都可以作为锁对象，结合synchronized将代码块或方法锁住。Java的每个对象都有一个对象头，决定是否为锁对象的关键就在于对象头中的markword
+
+1. 普通对象的在没有调用native的hashcode方法之前，markword由分代年龄和后三位的锁状态信息构成。如果在 ①没有开启偏向锁；②开启了偏向锁同时开启了偏向锁启动延迟，但还没有超出延迟时间；③调用了native的hashcode方法，这三种情况下，即为不可偏向的无锁态，后三位为001；上述三种情况之外，为匿名偏向状态，后三位为101
+2. 普通对象结合synchronized使用，变成monitor对象。此时线程想要进入synchronized，会首先判断锁状态，如果是无锁不可偏向状态，则直接升级成轻量级锁；如果是匿名偏向状态，则线程通过CAS将指向自己的指针贴到markword中，
 
 ## AQS
+
+### :point_right:？
+
+## ConcurrentHashMap
+
+### :point_right:？
+
+## 阻塞队列
+
+### :point_right:？
+
+## 线程池
 
 ### :point_right:？
 
