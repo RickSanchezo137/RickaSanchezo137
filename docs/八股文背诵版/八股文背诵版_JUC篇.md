@@ -266,14 +266,31 @@ class Singleton{
 
 ### :point_right:synchronized在代码块和方法中的区别？
 
+代码块必须显式地将锁对象包裹在synchronized后面的括号中，方法会将this作为锁对象。代码块中看javap指令可以看到javac编译成了monitorenter和monitorexit两个字节码指令，对于方法会添加一个ACC_SYNCHRONIZED标志位，加锁都是差不多的流程
+
 ### :point_right:锁升级？
 
 以前的synchronized是重量级锁，涉及到各种上下文切换等，开销比较大，是比较“重”的锁。后面对synchronized进行了改进，有一个从偏向锁升级成轻量级锁升级成重量级锁的过程，大大提高了synchronized的效率
 
 具体细节是这样的，在Java中每一个对象都可以作为锁对象，结合synchronized将代码块或方法锁住。Java的每个对象都有一个对象头，决定是否为锁对象的关键就在于对象头中的markword
 
-1. 普通对象的在没有调用native的hashcode方法之前，markword由分代年龄和后三位的锁状态信息构成。如果在 ①没有开启偏向锁；②开启了偏向锁同时开启了偏向锁启动延迟，但还没有超出延迟时间；③调用了native的hashcode方法，这三种情况下，即为不可偏向的无锁态，后三位为001；上述三种情况之外，为匿名偏向状态，后三位为101
-2. 普通对象结合synchronized使用，变成monitor对象。此时线程想要进入synchronized，会首先判断锁状态，如果是无锁不可偏向状态，则直接升级成轻量级锁；如果是匿名偏向状态，则线程通过CAS将指向自己的指针贴到markword中，
+1. 普通对象的在没有调用native的hashcode方法之前，markword由分代年龄和后三位的锁状态信息构成。如果在 ①没有开启偏向锁；②开启了偏向锁UseBiasedLocking同时开启了偏向锁启动延迟BiasedLockingStartupDelay，但还没有超出延迟时间；③调用了native的hashcode方法，这三种情况下，即为不可偏向的无锁态，后三位为001；上述三种情况之外，为匿名偏向状态，后三位为101
+
+2. 普通对象结合synchronized使用，变成锁对象。此时线程想要进入synchronized，会首先判断锁状态，如果是无锁不可偏向状态，则直接升级成轻量级锁；如果是匿名偏向状态，则线程通过CAS将指向自己的指针贴到markword中，并执行同步块内的代码；如果是已偏向状态，线程检查自己的线程ID和锁对象的markword中线程ID是否一致，如果是一致则表明发生了重入则继续执行，如果不一致表明发生了线程竞争，需要等到安全点时，从偏向锁状态撤销到无锁状态，并升级成轻量级锁
+
+   升级成轻量级锁的过程是这样的，首先持有锁的线程在自己的栈帧中创建一个结构叫做lock record，具有两个成员属性，一个是displaced mark word，一个是owner指针。首先将锁对象中的mark word拷贝到lock record作为displaced mark word，接着尝试通过CAS改变锁对象中的mark word，需要贴入一个指向自己栈帧中的lock record的指针，接着将owner指向锁对象中的mark word，成功则表明占有锁，修改锁标志位后两位为00，不成功则进入自旋*（JDK 7之前可以通过PreSpinLock参数调整自旋次数阈值，后面就是JVM自适应自旋，会根据时间局部性原理，认为刚刚成功进行自旋并完成CAS的很有可能再次成功，从而增加要进入锁对象的线程的自旋次数阈值）*。如果是重入的话，则会在线程中添加一个displaced mark word为null，owner依旧指向锁对象的mark word，根据lock record的数量来记录重入次数
+
+3. 自旋超过一定次数，说明竞争比较强烈，则升级成重量级锁，线程会创建一个ObjectMonitor对象，其中的\_header字段赋值为displaced mark word，_owner字段为拥有锁的线程*（lock record→thread）*，\_obj字段指向锁对象，\_recursion表示重入次数，原锁对象的mark word中的锁状态改为10，且贴上指向ObjectMonitor对象的指针。其他线程想要进入同步块时，发现锁被另外的线程持有了，则会被封装成一个ObjectWaiter对象，插入到cxq队列队首，并调用park函数阻塞线程，底层是靠mutex互斥锁；如果线程调用wait，则会插入到WaitSet中；被唤醒或解锁后会从cxq队列中移动到EntryList，并将原有队列的队尾线程作为唤醒候选。如果是重入的话，则会用\_recursions记录重入次数
+
+> 批量重偏向/撤销及epoch，后续跟进
+
+### :point_right:锁消除和锁粗化？
+
+锁消除是指JIT经过逃逸分析发现synchronized包裹的段不会发生数据的逃逸，即不会被其他线程访问到，则会消除这个锁从而获得更好的效率；锁粗化是指JIT编译优化对连续的使用相同锁对象的synchronized段，扩大其范围，合并成一个更大的锁
+
+### :point_right:synchronized可重入吗？
+
+可以重入。在偏向锁情况下，mark word里是线程ID，一个线程重入的话对比线程ID相同直接重入；在轻量级锁情况下，mark word里面指向持有锁线程的栈帧中的lock record，重入一次就在栈帧中添加一个displaced mark word为null的lock record；在重量级锁情况下，mark word指向ObjectMonitor对象，靠其中的_recursions记录重入次数
 
 ## AQS
 
