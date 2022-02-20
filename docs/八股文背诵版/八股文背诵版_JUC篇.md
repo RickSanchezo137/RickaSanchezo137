@@ -34,7 +34,7 @@
 - 从方法定义来说：sleep、join是Thread类的方法、wait是Object类的方法
 - 从方法调用来说：sleep由Thread类调用、join由thread对象来调用，它们没有调用地点的限制、wait由锁对象来调用，且必须调用在同步块中
 - 从是否释放cpu来说：sleep、wait都是调用这个方法处的线程暂停执行，自然会释放cpu，join底层是wait实现的，自然也会释放
-- 从是否释放锁资源来说：同步块中的sleep和join不会释放锁资源，wait会释放
+- 从是否释放锁资源来说：同步块中的sleep和join不会释放同步块对应的锁资源，wait会释放*（join是synchronized方法，释放的是调用者t）*
 
 > t.join()底层由wait实现，不是native方法，目的是令调用这个方法的线程等待t线程执行完成，牢记
 
@@ -280,7 +280,7 @@ class Singleton{
 
    升级成轻量级锁的过程是这样的，首先持有锁的线程在自己的栈帧中创建一个结构叫做lock record，具有两个成员属性，一个是displaced mark word，一个是owner指针。首先将锁对象中的mark word拷贝到lock record作为displaced mark word，接着尝试通过CAS改变锁对象中的mark word，需要贴入一个指向自己栈帧中的lock record的指针，接着将owner指向锁对象中的mark word，成功则表明占有锁，修改锁标志位后两位为00，不成功则进入自旋*（JDK 7之前可以通过PreSpinLock参数调整自旋次数阈值，后面就是JVM自适应自旋，会根据时间局部性原理，认为刚刚成功进行自旋并完成CAS的很有可能再次成功，从而增加要进入锁对象的线程的自旋次数阈值）*。如果是重入的话，则会在线程中添加一个displaced mark word为null，owner依旧指向锁对象的mark word，根据lock record的数量来记录重入次数
 
-3. 自旋超过一定次数，说明竞争比较强烈，则升级成重量级锁，线程会创建一个ObjectMonitor对象，其中的\_header字段赋值为displaced mark word，_owner字段为拥有锁的线程*（lock record→thread）*，\_obj字段指向锁对象，\_recursion表示重入次数，原锁对象的mark word中的锁状态改为10，且贴上指向ObjectMonitor对象的指针。其他线程想要进入同步块时，发现锁被另外的线程持有了，则会被封装成一个ObjectWaiter对象，插入到cxq队列队首，并调用park函数阻塞线程，底层是靠mutex互斥锁；如果线程调用wait，则会插入到WaitSet中；被唤醒或解锁后会从cxq队列中移动到EntryList，并将原有队列的队尾线程作为唤醒候选。如果是重入的话，则会用\_recursions记录重入次数
+3. 自旋超过一定次数，说明竞争比较强烈，则升级成重量级锁，线程会创建一个ObjectMonitor对象，其中的\_header字段赋值为displaced mark word，_owner字段为拥有锁的线程*（lock record→thread）*，\_obj字段指向锁对象，\_recursion表示重入次数，原锁对象的mark word中的锁状态改为10，且贴上指向ObjectMonitor对象的指针。其他线程想要进入同步块时，发现锁被另外的线程持有了，则会被封装成一个ObjectWaiter对象，插入到\_cxq队列队首，并调用park函数阻塞线程，底层是靠mutex互斥锁；如果线程调用wait，则会插入到\_waitSet中；被唤醒或解锁后会从cxq队列中移动到\_EntryList，并将原有队列的队尾线程作为唤醒候选。如果是重入的话，则会用\_recursions记录重入次数
 
 > 批量重偏向/撤销及epoch，后续跟进
 
@@ -294,9 +294,131 @@ class Singleton{
 
 ## AQS
 
-### :point_right:？
+### :point_right:介绍一下AQS？
+
+> 是什么？什么用？技术细节及流程？缺陷？
+
+> STAR法则：
+>
+> - ① situation：情景，为什么要这样？场景是什么？
+> - ② task：任务，要完成的任务是什么？
+> - ③ action：行动，为了完成任务，是怎么行动的？
+> - ④ result：实现的结果如何
+
+① AQS的全称是AbstractQueuedSynchronizer，它是一个抽象类，是一个用于构建锁、各种同步器等工具类的框架类，通过继承他能够方便地编写出高效率、线程安全的线程同步工具类
+
+② 它的任务是保证持有锁的线程运行时是线程安全的，同时合理令竞争锁的线程进行自旋、阻塞，实现高效
+
+③ AQS有一套阻塞并唤醒线程以及分配锁的机制，底层主要是靠一个由Node节点构成的双向队列组成的
+
+- Node是AQS的静态内部类，它用于封装线程并构成双向队列，Node中有这样几个比较重要的构成：thread引用指向它所包装的线程；prev和next属性指向前后节点，int型变量waitStatus表达自己所包装线程的状态，有CANCELED=1，SIGNAL=-1，CONDITION=-2，PROPAGATE=-3；用引用SHARED=new Object()表达共享模式，对应CountDownLatch、读锁、CyclicBarrier等等，EXCLUSIVE=null表达独占模式，对应有ReentrantLock、写锁等等
+
+- 对于AQS本身来说，有这样几个重要的构成：Node head引用指向双向队列的头节点，这是一个哨兵节点，不包装任何线程；Node tail指向尾节点；int state是最为关键的共享资源变量，由AQS扩展的工具类都要靠state来决定线程持有锁的状态，比如在ReentrantLock中，线程独占锁之后令state+1，重入也+1，只有等原线程释放锁并令state减为0，其他线程才有机会占有锁，又比如在使用CountDownLatch的时候，初始化setState令state为一个大于0的值，只有其他线程countDown令state重新等于0，原调用await的线程才能被唤醒，所以说我认为这是最关键的一个变量
+
+  AQS中比较常见且重要的方法，我认为是acquire/release以及以他们为前缀的包括acquireShared/releaseShared等方法，因为AQS的子类工具类的主要功能加解锁基本都是靠调用这几个方法来实现，它们都是final修饰的是不能重写的，也就表明继承AQS的工具类只能根据这一套逻辑来处理
+
+  **以acquire方法为例**，这是针对独占锁的方法
+
+  - 首先是在if逻辑`if(!tryAcquire(arg)&&acquireQueued(addWaiter(Node.Exclusive), arg))`里面尝试调用tryAcquire方法，这是一个钩子方法，本身的实现是抛出UnsupportedOperationException，子类可以通过重写它构建自己获取锁的逻辑，以ReentrantLock为例，就是重写了tryAcquire方法，如果是非公平锁，就尝试令线程通过CAS让state变成1，并设置AQS的父类AbstractOwnableSynchronizer的exclusiveOwnerThread为当前线程，用于重入时候的判断
+
+  - 如果tryAcquire拿锁失败，就会进入if逻辑中的第二个方法`acquireQueued(addWaiter(Node.EXCLUSIVE), arg)`
+
+    - addWaiter的主要作用是创建一个新Node，令其thread字段指向当前线程，并令nextWaiter为null，同时通过CAS将这个Node接到上面提到的双向队列的队尾，如果队列不存在则创建一个，最后将这个Node返回
+
+    - acquireQueued主要作用是对刚刚返回的Node中的线程进行阻塞，首先会令一个临时变量interrupted = false，接着进入一个死循环，首先进入第一个if逻辑`if(p==head&&tryAcquire(arg))`判断Node的前驱节点p是否为head，如果是的话，则尝试一次CAS拿锁，拿锁成功的话则令这个Node成为新的head，令其中的thread指向null，并令acquireQueued方法返回interrupted变量，此时为false；如果前驱不为头节点或拿锁失败的话则进入第二个if逻辑`if(shouldParkAfterFailedAcquire(p, node))`，顾名思义，就是是否应该在加锁失败之后阻塞线程，进入方法可以看到，首先需要判断前驱节点的waitStatus，如果为SIGNAL即-1，返回true；如果>0表明前驱是CANCELED，则将所有前面CANCELED的节点全部从队列中移除，最后返回false；其他情况下，将前驱节点的waitStatus置为SIGNAL并返回false。对于刚刚返回true的结果，进入parkAndCheckInterrupt方法使用LockSupport.park来进行挂起；对于返回false的结果，也就是前驱节点状态不为SIGNAL的结果，再进行一次判断前驱节点是否为head并CAS拿锁的操作，如果不满足条件，则再次进入shouldParkAfterFailedAcquire，这时由于上一轮已经把前驱节点的状态设置为SIGNAL了，就一定会进入parkAndCheckInterrupt用park阻塞自己，也就是说，在前驱节点SIGNAL的情况下会尝试拿锁一次，不是SIGNAL的情况下会尝试拿锁两次
+
+      此外，LockSupport.park时，如果线程的中断标志位为true，则不会阻塞而直接执行下面的代码，在parkAndCheckInterrupt中是直接返回Thread.interrupted，也就是返回true并令中断位恢复。返回true后，根据`interrupted |= parkAndCheckInterrupt()`，刚刚提到的interrupted局部变量就会一直为true，但此时还不能进行处理，因为线程还没能拿到锁，等到线程拿到锁执行后acquireQueued就会返回true，调用selfInterrupt()方法令自己的中断位为true，并在自己的逻辑中处理中断。总结起来，也就是线程在拿锁过程中被申请中断了，也可以正确执行AQS的逻辑进行阻塞*（需要通过局部变量记录中断位并令中断位为false）*，否则如果不令中断位为false，park就对这个线程一直起不到阻塞作用了，它会一直循环拿锁
+
+  **接着是release方法**
+
+  - 这个方法比较简单，首先会去调用tryRelease，以ReentrantLock重写的为例，会直接修改state的值减一*（不需要CAS，因为已经持有锁了）*，如果state不等于0的时候返回false，等于0的时候返回true
+  - 返回true之后，判断head不为空且waitStatus不为0，我们知道在加锁的时候已经被改成了SIGNAL，所以成功的话，进入unparkSuccessor方法进行线程唤醒，也就是，靠头节点唤醒它后面的节点中的线程
+    - 在unparkSuccessor中，首先通过CAS尝试将head的waitStatus改成0，这一步允许失败
+    - 接着判断其后继节点，如果为null或者waitStatus大于0，则从队列尾部向前找到最接近队首的waitStatus小于0的节点并唤醒它，不为null且waitStatus不大于0则直接唤醒它；此时卡在LockSupport.park处的线程苏醒，由于没有中断，返回false，于是在外部的`if(!tryAcquire(arg)&&acquireQueued(addWaiter(Node.Exclusive), arg))`逻辑中，也就不会调用selfInterrupt方法了
+
+> propagate：共享锁具有传播性，当若干个线程等待在队列中，有共享资源的时候，可能此时是出现了多个共享资源。在独占锁中只有持有锁的线程release的时候需要唤醒头节点后面的节点，获取锁时不需要；而在共享锁中当线程**获得**共享资源时，也要通过setHeadAndPropagate去唤醒后面的线程可以来拿共享资源了，避免等待太久，唤醒过程在老版本JUC中可能出现有的线程永远无法唤醒的bug，因此propagete状态的引入就是为了避免这个状态
+
+> 读写锁：state高16位用作读锁*（>>>16后操作）*，共享模式；低16位用作写锁，独占模式
+
+### :point_right:为什么要从后向前找线程解锁？
+
+假设有这样一个场景，首先A线程拿到锁正常执行，此时B线程第一次tryAcquire失败，进入入队逻辑，我们都知道会再tryAcquire一次，如果是这样的流程：
+
+1. A tryRelease，将state减为0，同时用一个局部变量h等于head
+2. A卡顿
+3. B tryAcquire成功，由于B节点已经入队，需要令对应的节点为新的head节点，并令之前的head.next指向null方便gc
+4. A恢复，此时A的局部变量h指向的是原头节点，但它的next已经为null了，所以无法通过next来查找了，只能从后往前找
+
+### :point_right:讲讲公平锁？
+
+公平锁顾名思义就是为了实现线程按顺序“公平”的获取锁，具体实现在其他方面比如入队等和非公平锁基本一致，只有刚开始调用tryAcquire的时候，会在if逻辑中**首先**用hasQueuedPredecessors判断是否有前驱节点且其中的线程不是本线程，如果有的话，tryAcquire返回false，进入入队逻辑；没有的话，才能在if逻辑中走到CAS自旋，尝试拿锁
+
+### :point_right:讲讲Condition？
+
+Condition提供了一种精确唤醒的办法，以ReenTrantLock为例，调用newCondition会返回一个ConditionObject对象，每个ConditionObject对象中对应有一个条件队列，头节点是firstWaiter，尾节点是lastWaiter。某个Condition调用await时，会首先将自己封装成一个Node节点插入到对应Condition对象的条件队列当中。封装成节点时会首先判断自己有没有持有锁，即通过exclusiveThread来判断，不持有则抛出IllegalMonitorException异常；如果持有锁，则封装成节点并返回，然后挂起自己。此后，如果有其他线程调用了这个Condition对象的signal方法，则会unpark刚刚所说的在条件队列中的线程，并从条件队列中移出，进入AQS队列，然后调用acquireQueued方法参与竞争state锁以及在AQS队列中阻塞的逻辑
+
+> Condition实现轮流打印
+>
+> ```java
+> import lombok.SneakyThrows;
+> import java.util.concurrent.locks.*;
+> class Testt {
+>     public static void main(String[] args) {
+>         ReentrantLock lock = new ReentrantLock();
+>         Condition A = lock.newCondition(), B = lock.newCondition(), C = lock.newCondition();
+>         new Thread(new Runnable() {
+>             @SneakyThrows
+>             @Override
+>             public void run() {
+>                 for (int i = 0; i < 5; i++) {
+>                     lock.lock();
+>                     A.await();
+>                     System.out.println("A");
+>                     B.signal();
+>                     lock.unlock();
+>                 }
+>             }
+>         }, "A").start();
+>         new Thread(new Runnable() {
+>             @SneakyThrows
+>             @Override
+>             public void run() {
+>                 for (int i = 0; i < 5; i++) {
+>                     lock.lock();
+>                     B.await();
+>                     System.out.println("B");
+>                     C.signal();
+>                     lock.unlock();
+>                 }
+>             }
+>         }, "B").start();
+>         new Thread(new Runnable() {
+>             @SneakyThrows
+>             @Override
+>             public void run() {
+>                 for (int i = 0; i < 5; i++) {
+>                     lock.lock();
+>                     C.await();
+>                     System.out.println("C");
+>                     A.signal();
+>                     lock.unlock();
+>                 }
+> 
+>             }
+>         }, "c").start();
+>         lock.lock();
+>         A.signal();
+>         lock.unlock();
+>         while (Thread.activeCount() > 2){
+>             Thread.yield();
+>         }
+>     }
+> }
+> ```
 
 ## ConcurrentHashMap
+
+### :point_right:？
 
 ### :point_right:？
 
