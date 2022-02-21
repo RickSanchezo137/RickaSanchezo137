@@ -340,6 +340,8 @@ class Singleton{
 
 > 读写锁：state高16位用作读锁*（>>>16后操作）*，共享模式；低16位用作写锁，独占模式
 
+> 共享锁里面可以调用tryLock来非公平地拿锁，不过是sync.nonFairTryAcquire，只CAS获取一次，不会有后面acquireQueued那些操作
+
 ### :point_right:为什么要从后向前找线程解锁？
 
 假设有这样一个场景，首先A线程拿到锁正常执行，此时B线程第一次tryAcquire失败，进入入队逻辑，我们都知道会再tryAcquire一次，如果是这样的流程：
@@ -418,9 +420,27 @@ Condition提供了一种精确唤醒的办法，以ReenTrantLock为例，调用n
 
 ## ConcurrentHashMap
 
-### :point_right:？
+### :point_right:介绍一下ConcurrentHashMap？
 
-### :point_right:？
+> 依旧是Situation→Task→Action→Result
+
+ConcurrentHashMap是一个线程安全的Map，它的出现是为了解决在多线程下使用HashMap可能出现的线程不安全的情况，比如循环链表、数据丢失、数据覆盖等问题；同时保证一定的并发性，而不是像Hashtable那样都用synchronized包装，造成效率底下
+
+**1.7**
+
+ConcurrentHashMap的具体实现在JDK 1.7及1.8的版本中有所不同，在1.7中的实现是靠分段锁的思想，一个ConcurrentHashMap对象底层是一个Segment数组，Segment是ConcurrentHashMap的内部类，它继承了ReentrantLock，可以调用lock等方法进行加解锁。每个Segment内部有一个HashEntry数组，HashEntry跟HashMap 1.7版本的Entry比较类似，是一个链表节点的结构，是具体存放键值对的数据结构。总体看下来，是一个数组+数组+链表的结构，每次某线程操作一个Segment的时候，会进行加锁，此时其他的线程就无法对这个Segment进行操作，但不影响对其他Segment的操作，这样，就保证一定并发性的基础下，也是线程安全的。具体的实现，以put方法为例
+
+### :point_right:ConcurrentHashMap和Hashtable的区别？
+
+
+
+### :point_right:1.7和1.8的区别？
+
+
+
+## ThreadLocal
+
+
 
 ## 阻塞队列
 
