@@ -325,9 +325,12 @@ class Singleton{
 
     - addWaiter的主要作用是创建一个新Node，令其thread字段指向当前线程，并令nextWaiter为null，同时通过CAS将这个Node接到上面提到的双向队列的队尾，如果队列不存在则创建一个，最后将这个Node返回
 
-    - acquireQueued主要作用是对刚刚返回的Node中的线程进行阻塞，首先会令一个临时变量interrupted = false，接着进入一个死循环，首先进入第一个if逻辑`if(p==head&&tryAcquire(arg))`判断Node的前驱节点p是否为head，如果是的话，则尝试一次CAS拿锁，拿锁成功的话则令这个Node成为新的head，令其中的thread指向null，并令acquireQueued方法返回interrupted变量，此时为false；如果前驱不为头节点或拿锁失败的话则进入第二个if逻辑`if(shouldParkAfterFailedAcquire(p, node))`，顾名思义，就是是否应该在加锁失败之后阻塞线程，进入方法可以看到，首先需要判断前驱节点的waitStatus，如果为SIGNAL即-1，返回true；如果>0表明前驱是CANCELED，则将所有前面CANCELED的节点全部从队列中移除，最后返回false；其他情况下，将前驱节点的waitStatus置为SIGNAL并返回false。对于刚刚返回true的结果，进入parkAndCheckInterrupt方法使用LockSupport.park来进行挂起；对于返回false的结果，也就是前驱节点状态不为SIGNAL的结果，再进行一次判断前驱节点是否为head并CAS拿锁的操作，如果不满足条件，则再次进入shouldParkAfterFailedAcquire，这时由于上一轮已经把前驱节点的状态设置为SIGNAL了，就一定会进入parkAndCheckInterrupt用park阻塞自己，也就是说，在前驱节点SIGNAL的情况下会尝试拿锁一次，不是SIGNAL的情况下会尝试拿锁两次
+    - acquireQueued：*两个if*
 
-      此外，LockSupport.park时，如果线程的中断标志位为true，则不会阻塞而直接执行下面的代码，在parkAndCheckInterrupt中是直接返回Thread.interrupted，也就是返回true并令中断位恢复。返回true后，根据`interrupted |= parkAndCheckInterrupt()`，刚刚提到的interrupted局部变量就会一直为true，但此时还不能进行处理，因为线程还没能拿到锁，等到线程拿到锁执行后acquireQueued就会返回true，调用selfInterrupt()方法令自己的中断位为true，并在自己的逻辑中处理中断。总结起来，也就是线程在拿锁过程中被申请中断了，也可以正确执行AQS的逻辑进行阻塞*（需要通过局部变量记录中断位并令中断位为false）*，否则如果不令中断位为false，park就对这个线程一直起不到阻塞作用了，它会一直循环拿锁
+      1. 主要作用是对刚刚返回的Node中的线程进行阻塞，首先会令一个临时变量interrupted = false，接着进入一个死循环，首先进入第一个if逻辑`if(p==head&&tryAcquire(arg))`判断Node的前驱节点p是否为head，如果是的话，则尝试一次CAS拿锁，拿锁成功的话则令这个Node成为新的head，令其中的thread指向null，并令acquireQueued方法返回interrupted变量，此时为false
+      2. 如果前驱不为头节点或拿锁失败的话则进入第二个if逻辑`if(shouldParkAfterFailedAcquire(p, node))`，顾名思义，就是是否应该在加锁失败之后阻塞线程，进入方法可以看到，首先需要判断前驱节点的waitStatus，如果为SIGNAL即-1，返回true；如果>0表明前驱是CANCELED，则将所有前面CANCELED的节点全部从队列中移除，最后返回false；其他情况下，将前驱节点的waitStatus置为SIGNAL并返回false。对于刚刚返回true的结果，进入parkAndCheckInterrupt方法使用LockSupport.park来进行阻塞；对于返回false的结果，也就是前驱节点状态不为SIGNAL的结果，再进行一次判断前驱节点是否为head并CAS拿锁的操作，如果不满足条件，则再次进入shouldParkAfterFailedAcquire，这时由于上一轮已经把前驱节点的状态设置为SIGNAL了，就一定会进入parkAndCheckInterrupt用park阻塞自己，也就是说，在前驱节点为SIGNAL的情况下会尝试拿锁一次，不是SIGNAL的情况下会尝试拿锁两次
+
+      此外，LockSupport.park时，如果线程的中断标志位为true，则不会阻塞而直接执行后面的代码，在parkAndCheckInterrupt中会直接返回Thread.interrupted，也就是返回true并令中断位恢复。返回true后，根据`interrupted |= parkAndCheckInterrupt()`，刚刚提到的interrupted局部变量就会一直为true，但此时还不能进行处理，因为线程还没能拿到锁，等到线程拿到锁执行后acquireQueued就会返回true，调用selfInterrupt()方法令自己的中断位为true，并在自己的逻辑中处理中断。总结起来，也就是线程在拿锁过程中被申请中断了，也可以正确执行AQS的逻辑进行阻塞*（需要通过局部变量记录中断位并令中断位为false）*，**否则如果不令中断位为false，park就对这个线程一直起不到阻塞作用了，它会一直循环拿锁**
 
   **接着是release方法**
 
@@ -428,19 +431,84 @@ ConcurrentHashMap是一个线程安全的Map，它的出现是为了解决在多
 
 **1.7**
 
-ConcurrentHashMap的具体实现在JDK 1.7及1.8的版本中有所不同，在1.7中的实现是靠分段锁的思想，一个ConcurrentHashMap对象底层是一个Segment数组，Segment是ConcurrentHashMap的内部类，它继承了ReentrantLock，可以调用lock等方法进行加解锁。每个Segment内部有一个HashEntry数组，HashEntry跟HashMap 1.7版本的Entry比较类似，是一个链表节点的结构，是具体存放键值对的数据结构。总体看下来，是一个数组+数组+链表的结构，每次某线程操作一个Segment的时候，会进行加锁，此时其他的线程就无法对这个Segment进行操作，但不影响对其他Segment的操作，这样，就保证一定并发性的基础下，也是线程安全的。具体的实现，以put方法为例
+ConcurrentHashMap的具体实现在JDK 1.7及1.8的版本中有所不同，在1.7中的实现是靠分段锁的思想，一个ConcurrentHashMap对象底层是一个Segment数组，Segment是ConcurrentHashMap的内部类，它继承了ReentrantLock，可以调用lock等方法进行加解锁。每个Segment内部有一个HashEntry数组table，HashEntry跟HashMap 1.7版本的Entry比较类似，是一个链表节点的结构，是具体存放键值对的数据结构。总体看下来，是一个数组+数组+链表的结构，每次某线程操作一个Segment的时候，会进行加锁，此时其他的线程就无法对这个Segment进行操作，但不影响对其他Segment的操作，这样，就保证一定并发性的基础下，也是线程安全的，具体的细节是这样的：
+
+- 初始化：首先初始化的时候可以指定initialCapacity、loadFactory、concurrencyLevel，会首先初始化一个二次幂大小的Segment数组segments，且只初始化第一个Segment对象segments[0]以及其中的HashEntry数组，作为一个模板待后面使用，并且计算**segmentShift**和**segmentMask**，便于后面快速定位时使用
+
+- put：*Segment位置的确认→调用segments[x]的put*
+
+  接着以put方法为例，会根据hash方法计算哈希值，将计算到的哈希值右移segmentShift位，与segmentMask相与去确定选择哪一个Segment槽*（选择HashEntry槽位的时候根据hash直接计算，选择Segment槽位时右移hash计算，这样，就一个用的是低位信息，一个用的是高位信息：下面get方法中有例子）*，如果这个槽位的Segment为null，则先调用ensureSegment方法，先根据初始化时确定好的模板的一系列参数来生成对应的HashEntry数组，接着创建一个Segment并令table指向刚刚生成的HashEntry数组，同时通过CAS加自旋将这个Segment对象插入刚刚的Segment槽位，接着调用Segment对象的put方法
+
+  在Segment对象的put方法中，首先尝试tryLock，也就是nonFairTryAcquire拿锁一次，如果获取到锁，就创建一个HashEntry节点并头插法插入槽位；如果失败，则会进入scanAndLockForPut方法中，首先直接用hash和table长度减一**直接相与**确定HashEntry槽位，接着初始化retries变量为-1，接着进入`while(!tryLock())`自旋：当retries<0时，有三种情况，首先会判断对应槽位是否为null，如果是就**预创建**一个HashEntry节点，令retries=0；如果不为null，则遍历链表，遍历到尾部的时候再预创建一个节点，令retries=0；如果途中遇见满足hashcode相同和equals的key，就令retries=0。上述三种情况之外都不会进入遍历链表的逻辑了，会不断自旋尝试获取锁，如果超过阈值就调用lock()方法，如果自旋过程中其他线程插入了节点，则重置retries并重新遍历链表。scanAndLockForPut获取到锁，用预创建的节点头插法插入槽位。如果put后，count+1大于threshold，进入扩容逻辑
+
+- 扩容：遍历table，对于不为null的槽位，遍历链表并移到新数组上，用到了lastRun的方法*（具体看源码，很清晰）*，以lastRun获取到的是高位节点为例，lastRun及后面的节点直接移动到新数组对应位置，其他的节点通过头插法逐个插到新位置。这样就导致，lastRun及后面的节点顺序不变，前面的节点和原数组相比倒序了
+
+- get：get操作两步走，先确定Segment索引，将hash右移后与上segmentMask，再确定HashEntry索引，将hash原封不动与上table.length-1
+
+**1.8**
+
+1.8的主要思想和1.7的版本不同，主要是靠cas和synchronized来实现的。底层实现是Node数组table，用hash值标识Node节点的状态，大于0为普通节点，MOVED=-1为正处于扩容过程中的节点，TREEBIN=-2为指向红黑树的节点，其中的first引用指向树，表明这个桶已经被树化了；sizeCtl可以用来记录各种信息，大于等于0表示存放的是初始容量或扩容阈值，等于-1表示正在初始化，<0且不等于-1表示正在进行扩容，高16位用于记录数组的容量，低16位用于记录参与扩容的线程数。需要对其中的某个桶进行修改操作时，会用synchronized将这个桶锁住，此外，如果在访问节点时发现节点为MOVED节点的时候，还可以参与数组的扩容操作，这是一个较高优先级的操作，通过transferIndex变量和计算出的stride确定每个线程的工作范围。具体的细节是这样的：
+
+- 初始化：初始化的时候可以指定initialCapacity、loadFactory和concurrencyLevel，这里不会首先初始化Node数组，而是在put的时候进行延迟初始化。初始化的时候用sizeCtl来记录初始大小，无参构造方法中为0，其他构造方法中为二次幂
+
+- put：*spread+自旋中的四个if+addCount*
+
+  - 首先会计算hash值，这里调用的是spread方法，在进行哈希扰动后又与上了一个`HASH_BITS=0x7FFFFFFF`，令为正数，防止与其他类型节点混淆
+
+  - 然后进入自旋
+
+    - 首先判断table是否为null，如果是，则进入initTable方法，首先进入一个while自旋，如果判断sizeCtl<0表明此时有其他线程正在操作，则yield放弃cpu，否则通过cas将sizeCtl改成-1，表明自己正在进行初始化，初始化完成之后，令sizeCtl等于数组扩容阈值*（这里判断tab==null有个double check，针对有可能出现的ABA问题，防止重复初始化）*
+    - 接着会判断对应桶是否为null，如果为null则通过cas给对应桶的位置创建一个节点并break跳出循环
+    - 接着判断节点是否为forwarding节点，也就是哈希值是否为-1，如果是则先调用helpTransfer辅助扩容
+    - 接着真正进行put操作，首先synchronized锁住节点，判断头节点哈希值是否大于等于0，如果是则进行普通节点的遍历并记录链表长度，遍历完过后通过尾插法插入新节点并break；如果找到重复key则根据onlyIfAbsent判断是否需要覆盖并break；如果哈希值为-2，表示为TreeBin节点，指向红黑树，就调用树节点的putTreeVal方法
+
+  - 跳出自旋后，如果binCount大于阈值且节点总数目大于指定阈值，对这个桶进行树化，第一个节点不存值，是一个TreeBin节点，哈希值为-2，first指向真正的红黑树。接着调用addCount方法：*计算节点数→扩容*
+
+    - 首先是计算Map的节点数，ConcurrentHashMap 1.8的节点数是靠volatile的baseCount变量和CounterCell[]数组来实现的，和LongAdder采用了完全相同的算法。首先判断CounterCell数组是否为null，为null的话就首先通过cas给baseCount加，如果失败的话则**根据线程哈希探针**找CounterCell数组中某个桶，如果桶不为空，通过cas令对应CounterCell节点的value加，否则进入fullAddCount方法自旋
+
+      如果是数组或桶为null的情况，则利用cellsBusy变量结合cas作为锁，竞争锁并初始化数组或桶，一直竞争不到锁，则只能重新通过cas处理baseCount；如果是对CounterCell桶cas失败的情况，首先会尝试rehash一次，对应桶再次失败，说明竞争比较激烈，则尝试给CounterCell数组扩容
+
+      最后，将baseCount和CounterCell数组中所有CounterCell对象的value相加即为最终结果
+
+    - 接着判断节点数是否大于阈值，如果是则需要扩容。扩容会首先调用resizeStamp方法，具体是`Integer.numberOfLeadingZeros(n)|((1<<RESIZE_STAMP_BITS-1))`，接着通过cas将sizeCtl或上这个值后左移`RESIZE_STEMP_SHIFT`位，再加上2，这里的`RESIZE_STAMP_BITS`+`RESIZE_STEMP_SHIFT`=32，也就是说，扩容中的sizeCtl最高位一定是1，且高`RESIZE_STAMP_BITS`位可以用来记录numberOfLeadingZeros，可以通过这个值计算出数组容量，低`RESIZE_STEMP_SHIFT`位用于记录线程个数；后续的线程到来时，发现sizeCtl<0，就知道已经有线程正在扩容，于是通过cas给sizeCtl加一，进入辅助扩容
+
+- 扩容：线程发现forwarding节点、发现sizeCtl<0但数组是已经初始化的等等情况，都会进入扩容流程，volatile的变量transferIndex减stride，就是自己负责迁移的范围，然后通过cas更新transferIndex。每处理完原数组的某个节点，都会将节点标记为forwarding节点，里面有个nextTable指针指向新table，这样后续的线程可以根据这个forwarding节点去参与辅助扩容或在新table中找数据。线程完成扩容后，会令sizeCtl减一，全部完成后才能更新table的指向，并且令sizeCtl为新table的扩容阈值
+
+  链表的迁移在1.7版本上更进了一步，在遍历过程中记录hn high node和ln low node，并记录runBit和lastRun，runBit是最后一次发生变化的`哈希值&原table长度的结果`，首先是将lastRun之外的节点通过尾插法连成hn链表、ln链表，然后将lastRun接上对应的链表，最后将这hn链表放到新table的节点旧索引+旧长度的位置，ln放到新table旧索引的位置
+
+  ![1](imgs\JUC\1.png)
+
+- get：get的时候，如果碰到forwarding节点，就会调用Node的find方法，实际上调用的是它的子类ForwardingNode的find方法
 
 ### :point_right:ConcurrentHashMap和Hashtable的区别？
 
+HashTable是同步容器，用synchronized修饰所有方法，每个操作都只能有一个线程在进行，效率不高；ConcurrentHashMap是并发容器，在1.7版本中利用了分段锁的思想，在1.8版本中摈弃了分段锁，采用synchronized只锁住一个桶的思想，并通过其他巧妙的设计，在保证了线程安全的情况下，保持了并发性，大大提高了效率
 
+### :point_right:ConcurrentHashMap的size怎么计算的？
+
+ConcurrentHashMap 1.7是通过在自选中遍历segments数组并统计每个segment的count之和来实现的，会先不加锁的计算三遍，如果其中连续两次结果一致，就直接break并返回，否则超过了retry次数阈值，会用lock去给每个segment加锁，再计算一次；在1.8中是调用sumCount()方法，也就是baseCount加上CounterCell[]数组的所有非空对象的value之和
 
 ### :point_right:1.7和1.8的区别？
 
+锁的思想；是否有树化；哈希值的作用；头插法尾插法等
 
+## CopyOnWriteArrayList
+
+### :point_right:简单介绍一下CopyOnWriteArrayList？
+
+CopyOnWriteArrayList，顾名思义，是“写时复制”列表，它的出现是为了解决传统列表在多线程情况下可能出现的线程不安全问题，实现一个并发安全的容器。它的底层是一个Object数组array，用于存放列表的元素，读取元素的方法不做任何加锁操作，可以多线程同时读取；而修改或添加操作会用synchronized+lock变量将方法内代码块锁住并且先对原始数组进行拷贝，并在拷贝的数组上进行操作，拷贝完成之后再调用setArray令array指向这个拷贝的数组。这种方式避免了多线程进行修改时的线程不安全情况，但弊端在于会产生大量的拷贝的新数组，占用内存空间，可能频繁触发GC，加上操作用synchronized锁只能有一个线程进行操作，同样也降低了效率
 
 ## ThreadLocal
 
+### :point_right:了解ThreadLocal吗？简单介绍一下应用场景
 
+ThreadLocal是一个多线程变量副本工具类，对于同一个变量的操作，每个线程在内部有一个副本，线程对这个变量的操作相当于是对线程内部的变量进行操作，与其他线程隔离开来，不会出现线程安全问题，是加锁之外的一种线程安全机制。具体的实现原理是在每个线程对象内部有个ThreadLocalMap的成员变量threadLocals，它是一个map的结构，底层是Entry数组table，每次对ThreadLocal变量进行set操作的时候，就以WeakReference包装ThreadLocal变量，即令其中的referent引用指向这个变量，并将这一个WeakReference作为key，要set的参数作为value，封装成一个Entry插入到map当中，如果出现hash冲突则通过线性再散列方法处理；当get的时候，首先从对应线程中拿到对应的threadLocals，也就是那个map，接着调用map.get方法，通过计算到的hash值和table.length-1相与，确定所在的位置并返回值。threadLocals允许有键为null的Entry存在
+
+为什么要使用弱引用封装Entry的key，是因为用强引用的话，如果使用ThreadLocal变量的某个线程长时间不中止，就算这个ThreadLocal对象超过了它应当的存在的生命周期，还是不能被回收，出现短生命周期对象被长生命周期引用所指向的情况，出现内存泄漏，因此要使用弱引用，在GC时一定被回收
+
+### :point_right:ThreadLocal会出现内存泄漏吗？分析一下
+
+会出现，因为虽然Entry的key是弱引用，但value是强引用，而且ThreadLocalMap允许null键的存在，因此可能导致键为null的Entry的value指向的对象迟迟无法回收，造成内存泄漏。ThreadLocal在set、get方法的末尾调用cleanSomeSlots，去除null键的Entry，一定程度上缓解了这个问题，但如果是在set一次之后发生了gc，且后面没有后续操作这种情况呢，因此使用ThreadLocal要注意去手动调用remove方法，清除null键
 
 ## 阻塞队列
 
@@ -449,6 +517,10 @@ ConcurrentHashMap的具体实现在JDK 1.7及1.8的版本中有所不同，在1.
 ## 线程池
 
 ### :point_right:？
+
+## CountDownLatch&CyclicBarrier
+
+
 
 ## 大厂真题
 
