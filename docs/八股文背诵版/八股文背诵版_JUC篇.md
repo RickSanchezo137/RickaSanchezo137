@@ -137,6 +137,10 @@ class Testt {
 - interrupted：如果中断了则返回true，并将中断标志位reset
 - isInterrupted：返回是否中断
 
+### :point_right:手动创建线程？
+
+继承Thread、实现Runnable、实现Callable、线程池
+
 ## 并发模型及规则
 
 ### :point_right:讲一讲JMM？
@@ -360,7 +364,7 @@ class Singleton{
 
 ### :point_right:讲讲Condition？
 
-Condition提供了一种精确唤醒的办法，以ReenTrantLock为例，调用newCondition会返回一个ConditionObject对象，每个ConditionObject对象中对应有一个条件队列，头节点是firstWaiter，尾节点是lastWaiter。某个Condition调用await时，会首先将自己封装成一个Node节点插入到对应Condition对象的条件队列当中。封装成节点时会首先判断自己有没有持有锁，即通过exclusiveThread来判断，不持有则抛出IllegalMonitorException异常；如果持有锁，则封装成节点并返回，然后挂起自己。此后，如果有其他线程调用了这个Condition对象的signal方法，则会unpark刚刚所说的在条件队列中的线程，并从条件队列中移出，进入AQS队列，然后调用acquireQueued方法参与竞争state锁以及在AQS队列中阻塞的逻辑
+Condition提供了一种精确唤醒的办法，以ReenTrantLock为例，调用newCondition会返回一个ConditionObject对象，每个ConditionObject对象中对应有一个条件队列，头节点是firstWaiter，尾节点是lastWaiter。某个Condition调用await时，会首先将自己封装成一个Node节点插入到对应Condition对象的条件队列当中。封装成节点时会首先判断自己有没有持有锁，即通过exclusiveThread来判断，不持有则抛出IllegalMonitorException异常；如果持有锁，则封装成节点并返回，然后挂起自己。此后，如果有其他线程调用了这个Condition对象的signal方法，则会从条件队列中移出，进入AQS队列，并且unpark刚刚所说的在条件队列中的线程，然后调用acquireQueued方法参与竞争state锁以及在AQS队列中阻塞的逻辑
 
 > Condition实现轮流打印
 >
@@ -420,6 +424,10 @@ Condition提供了一种精确唤醒的办法，以ReenTrantLock为例，调用n
 >     }
 > }
 > ```
+
+### :point_right:ReentrantLock和Condition怎么绑定的？
+
+Condition是AQS的非静态内部类，当非静态内部类实例化时，会隐式持有外部类实例的引用this$0。ReentrantLock实例化时，实际还令内部的sync=new NonFairSync()，而Sync是AQS的子类，因此此时AQS对应的实例就是这个sync；接着调用newCondition方法，实际上是调用sync.newCondition，此时的Condition对象已经持有指向这个sync实例的引用this\$0了，因此后面在await方法中，调用的是自己的方法，而调用acquireQueued时，在自己内部找不到这个方法，于是调用的是这个sync对象的方法。也就是说，通过这个sync和ReentrantLock实现了绑定
 
 ## ConcurrentHashMap
 
@@ -506,21 +514,157 @@ ThreadLocal是一个多线程变量副本工具类，对于同一个变量的操
 
 为什么要使用弱引用封装Entry的key，是因为用强引用的话，如果使用ThreadLocal变量的某个线程长时间不中止，就算这个ThreadLocal对象超过了它应当的存在的生命周期，还是不能被回收，出现短生命周期对象被长生命周期引用所指向的情况，出现内存泄漏，因此要使用弱引用，在GC时一定被回收
 
+应用场景有：① 管理不同的数据库连接，用ThreadLocal包装Connection对象，这样每个线程调用getConnection不会每次都拿不同的连接，不同线程之间互不影响；② ThreadLocal结合AOP，实现日志打印，每个线程负责的请求完成之后再一起打印，多个线程之间互不影响；③ 多个线程同时使用SimpleDateFormat的时候，可能线程不安全，因为要操作同一个pattern成员变量，这时就可以将SimpleDateFormat用ThreadLocal封装；④ 使用ThreadLocal保存用户session信息
+
 ### :point_right:ThreadLocal会出现内存泄漏吗？分析一下
 
 会出现，因为虽然Entry的key是弱引用，但value是强引用，而且ThreadLocalMap允许null键的存在，因此可能导致键为null的Entry的value指向的对象迟迟无法回收，造成内存泄漏。ThreadLocal在set、get方法的末尾调用cleanSomeSlots，去除null键的Entry，一定程度上缓解了这个问题，但如果是在set一次之后发生了gc，且后面没有后续操作这种情况呢，因此使用ThreadLocal要注意去手动调用remove方法，清除null键
 
 ## 阻塞队列
 
-### :point_right:？
+### :point_right:简单介绍一下阻塞队列？
+
+阻塞队列是一个可以实现线程安全的阻塞取和阻塞添加的队列，当队列满时，put操作会被阻塞住；当队列空时，take操作会被阻塞住。阻塞是靠两个ConditionObject实现的，一个是notFull，一个是notEmpty，当put时，首先lock住，如果队列满则调用notFull.await()阻塞线程并释放锁，后续的线程再想进来，也会进入notFull对应的条件队列，此时只有其他线程完成了take操作，会调用notFull的signal，才会唤醒刚刚的线程继续在await方法中竞争锁，并进行后续的put操作。Condition底层是靠LockSupport实现的阻塞及唤醒
+
+### :point_right:手写一个生产者消费者
+
+```java
+class Producer{
+    ArrayBlockingQueue<Object> q;
+    public Producer(ArrayBlockingQueue<Object> q) {
+        this.q = q;
+    }
+    public Object take() throws InterruptedException {
+        return q.take();
+    }
+}
+class Consumer{
+    ArrayBlockingQueue<Object> q;
+    public Consumer(ArrayBlockingQueue<Object> q) {
+        this.q = q;
+    }
+    public void put(Object o) throws InterruptedException {
+        q.put(o);
+    }
+}
+```
+
+### :point_right:手写一个阻塞队列？
+
+```java
+class MyBlockingQueue<T>{
+    private final List<T> list;
+    private final int bound;
+    private final ReentrantLock lock = new ReentrantLock();
+    Condition notFull = lock.newCondition(), notEmpty = lock.newCondition();
+    public MyBlockingQueue(int bound) {
+        this.list = new ArrayList<>(bound + 1);
+        this.bound = bound;
+    }
+    public T take(){
+        lock.lock();
+        try{
+            while (list.size() == 0){
+                notEmpty.await();
+            }
+            return list.remove(0);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } finally {
+            lock.unlock();
+        }
+        throw new RuntimeException("error!");
+    }
+    public void put(T t){
+        lock.lock();
+        try{
+            while (list.size() == bound){
+                notFull.await();
+            }
+            list.add(t);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } finally {
+            lock.unlock();
+        }
+    }
+}
+```
 
 ## 线程池
 
-### :point_right:？
+### :point_right:线程池几种状态？
+
+- RUNNING：运行中
+- SHUTDOWN：处理已有任务，不添加新任务；调用shutdown进入
+- STOP：中断处理的任务，不添加新任务；调用shutDownNow进入
+- TIDYING：死亡进行时；SHUTDOWN状态下所有已有任务完成会进入
+- TERMINATED：线程彻底终止；TIDYING状态会执行terminated
+
+### :point_right:拒绝策略？
+
+线程池首先会有coorPoolSize个持续活跃的线程用于处理任务，任务数超过coorPoolSize能处理的之后，会将任务放进阻塞队列中等待执行，如果队列装满之后则会创建新线程，扩充到maximumPoolSize，如果任务再次超过maximumPoolSize，就会根据RejectedExecutionHandler参数指定的拒绝策略对新任务进行处理。拒绝策略有：AbortPolicy，会直接拒绝任务并抛出RejectExecutionException；CallerRunsPolicy，调用线程池的线程来处理新任务；DiscardOldestPolicy，抛弃队列中最老的任务并令新任务加入；DiscardPolicy，直接抛弃任务，不抛出异常
+
+### :point_right:为什么有个corePoolSize，还要有个maximumPoolSize？
+
+线程池的构建有七个参数：coorPoolSize，maximumPoolSize，keepAliveTime，unit，workQueue，threadFactory以及handler。线程池一般是任务来时才创建线程，除非调用了prestartCoreThread或者prestartAllCoreThreads，然后任务数到达coorPoolSize后，所有核心线程都在处理任务；此时若有新任务，则会进入workQueue排队等待执行，如果是有界队列，当队列满之后，maximumPoolSize就是在这个时候起到作用的，可以新创建一些线程来处理新任务，阈值为maximumPoolSize。当空闲下来后，keepAliveTime之后这些超出核心线程数的线程会销毁，如果设置了allowCoreThreadTimeout为true，则核心线程也会销毁
+
+### :point_right:为什么不推荐用Executors创建线程池？
+
+以几个常见的通过Executors创建线程池的方法为例：
+
+newFixedThreadPool和newSingleThreadExecutor分别设置若干个和一个核心线程，且只让核心线程工作，它们的workQueue是无参构造的LinkedBlockingQueue，是长度为Integer.MAX_VALUE的队列，新任务来会一直扩充，造成OOM，且会一直等待，造成响应时间无限延长
+
+newCachedThreadPool的队列是SychronousQueue，向它put之后，没有消费者线程会自旋然后阻塞住，它和take操作是一一配对的，因此，每次新来一个任务，就需要创建一个新线程去消费这个任务，它的线程数可以扩充到Integer.MAX_VALUE，并且空闲线程60s后才会销毁，因此可能因为线程太多产生OOM，线程太多也会造成较大开销
+
+因此建议根据实际情况，自己new ThreadPoolExecutor对象并自己指定参数
+
+### :point_right:你是依据什么设置线程池参数的？
+
+有一个通用的策略是，对于IO密集型任务，设置corePoolSize为cpu核数*2，因为IO过程cpu空闲，可以多创建几个线程；对于cpu密集型任务，则创建较少量线程，corePoolSize为cpu核数+1，充分利用cpu的计算能力
+
+还可以靠自己计算来实现，比如每秒来的任务是n个，每个任务需要处理t秒，允许的响应时间为s，对于corePoolSize，能够处理每秒来的所有任务，需要n/(1/t)个线程；对于maximumPoolSize，可以设置为每秒到达的最大任务数/(1/t)；对于workQueue，不要采用无界队列，可以考虑使用ArrayBlockingQueue或者PriorityBlockingQueue，队列长度可以设置为每秒能处理的线程数*响应时间，也就是n\*s
+
+也可以在运行过程中通过setCorePoolSize和setMaximumPoolSize动态调整参数*（源码注释有提到）*
+
+> [如何设置线程池参数？美团给出了一个让面试官虎躯一震的回答](https://mp.weixin.qq.com/s?__biz=Mzg3NjU3NTkwMQ==&mid=2247505103&idx=1&sn=a041dbec689cec4f1bbc99220baa7219&source=41#wechat_redirect)
+
+### :point_right:Java的线程池怎么实现的？
+
+线程池中有两个比较重要的容器，一个是HashSet\<Worker> workers，一个是workQueue，其中Worker继承了AQS；一个重要的原子变量ctl，它的高三位用于记录线程池状态，一开始为RUNNING，即-1左移COUNT_BITS=29位，后面想要再获取状态，可通过&~COUNT_BITS来实现；通过将低29位可以用来存放线程个数，即与COUNT_MASK相与来实现*（COUNT_MASK=(1<<29)-1，即COUNT_MASK的低29位全部是1，高3位全是0）*
+
+- *execute：三个if*
+  - 调用execute方法后，首先会通过ctl计算workCount，也就是正在运行的线程数，如果小于corePoolSize，则调用addWorker(command, true)创建核心线程并加入workers执行任务，并return
+  - 如果大于corePoolSize或addWorker失败，则进入第二个if，首先判断线程池状态，接着尝试将任务加入workQueue当中，如果入队成功会先recheck一次线程池状态，如果不为RUNNING则从workQueue移除并拒绝任务，如果是RUNNING但工作线程为0则会调用addWorker(null, false)创建线程从队列中取任务执行
+  - 如果入队失败则调用addWorker(command, false)创建线程执行任务，如果失败则拒绝任务
+- addWorker*：两个作用（ps：第一个参数为firstTask，null表明从队列中取任务，第二个参数为core，true表示不能大于corePoolSize，false表示不能大于maximumPoolSize）*
+  - 增加工作线程数workCount，并创建新线程加入workers执行任务
+- Worker：
+  - addWorker会调用worker.run会调用runWorker方法，里面会调用firstTask.run，如果firstTask为null，则调用getTask并调用所返回对象的run方法
+
+### :point_right:线程池中的线程是一开始就有的吗？如何保证核心线程不被销毁？
+
+不是，传入任务之后才会创建线程，除非调用prestartCoreThread或prestartAllCoreThreads
+
+保证核心线程不销毁在于runWorker方法中，如果工作全部完成，Worker里面的firstTask为null，会调用getTask方法，如果当前活动线程数大于核心线程数，就会调用workQueue.poll，否则调用workQueue.take阻塞住线程，就不会销毁了
+
+### :point_right:手写线程池
+
+> 目前无能为力
 
 ## CountDownLatch&CyclicBarrier
 
+### :point_right:CountDownLatch和CyclicBarrier的区别？
 
+对于CyclicBarrier
+
+1. 阻塞等待的是所有参与线程，参与线程全部到达barrier时，进行终极任务
+2. 具有**重复利用性**，可以执行多次终极任务
+
+而对于CountDownLatch
+
+1. 参与线程不会阻塞，而是终极任务的线程阻塞，等待其他所有线程手动countDown，**不影响自身执行**
+2. 终极任务只能执行一次
 
 ## 大厂真题
 
