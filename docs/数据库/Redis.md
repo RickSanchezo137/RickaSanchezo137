@@ -1474,8 +1474,7 @@ min-slaves-max-lag 10
 
 ## 复制延时
 
-由于所有的写操作都是先在master上操作，然后同步更新到slave上，所以从master同步到slave机器有一定的延迟， 当系统很繁
-忙的时候，延迟问题会更加严重，slave机器数量的增加也会使这个问题更加严重
+由于所有的写操作都是先在master上操作，然后同步更新到slave上，所以从master同步到slave机器有一定的延迟， 当系统很繁忙的时候，延迟问题会更加严重，slave机器数量的增加也会使这个问题更加严重
 
 ## 主从和集群的区别
 
@@ -2557,7 +2556,7 @@ dict 结构内部包含两个 hashtable，通常情况下只有一个 hashtable 
 
 ![image-20211116223114479](img\redis\105.png)
 
-hashtable的结构，和java的hashmap几乎一致（个人认为是linkedhashmap）
+hashtable的结构，和java的hashmap几乎一致
 
 ![image-20211116223234243](img\redis\106.png)
 
