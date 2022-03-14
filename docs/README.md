@@ -1,11 +1,13 @@
 # Java笔记自用
 
+> [github](https://ricksanchezo137.github.io/RickaSanchezo137/)
+
 ## 算法
 
-- [八大排序算法合集](/算法/排序算法合集.md)
-- [剑指offer合集](/算法/剑指offer.md)
+- [八大排序算法合集](/算法/排序算法合集.md):star:
+- [算法学习](/算法/算法总结.md)
 
-## JAVA基础
+## JAVA基础:star:
 
 - [JAVA基本知识](/JAVA基础/JAVA基础.md)
 - [JAVA语法](/JAVA基础/JAVA语法.md)
@@ -14,18 +16,34 @@
 
 ## JAVA进阶
 
-- [JAVA多线程入门](/JAVA进阶/JAVA多线程.md)
-- [JAVA常用类](/JAVA进阶/JAVA常用类.md)
+- [JAVA多线程入门](/JAVA进阶/JAVA多线程.md):star:
+- [JAVA常用类](/JAVA进阶/JAVA常用类.md):star:
 - [JAVA枚举类与注解](/JAVA进阶/JAVA枚举类与注解.md)
+- [JAVA集合](/JAVA进阶/JAVA集合.md):star:
+- [JAVA泛型与File](/JAVA进阶/JAVA泛型与File.md)
+- [JAVA IO](/JAVA进阶/JAVAIO.md)
+- [JAVA反射](/JAVA进阶/JAVA反射.md):star:
+- [JAVA新特性](/JAVA新特性/JAVA新特性.md)
 
-## JAVA并发
-
-- [JUC](/J.U.C/JUC.md)
-
-## JVM
+## JVM:star:
 
 - [JVM](/JVM/JVM.md)
 
-## 数据库
+## 杂七杂八难点深入:star:
 
-- [Redis](/数据库/Redis.md)
+- [杂七杂八知识点深入](/杂七杂八知识点深入/杂七杂八知识点深入.md)
+
+## 数据库:star:
+
+- [MySQL](/数据库/MySQL.md):star:
+- [MySQL技术内幕](/数据库/MySQL技术内幕.md)
+- [Redis](/数据库/Redis.md):star:
+
+## 八股文:star:
+
+- [JVM篇](/八股文背诵版/八股文背诵版_JVM篇.md)
+- [基础篇](/八股文背诵版/八股文背诵版_Java基础篇.md)
+- [集合容器篇](/八股文背诵版/八股文背诵版_集合容器篇.md)
+- [JUC篇](/八股文背诵版/八股文背诵版_JUC篇.md)
+- [MySQL篇](/八股文背诵版/八股文背诵版_MySQL篇.md)
+- [Redis篇](/八股文背诵版/八股文背诵版_Redis篇.md)
