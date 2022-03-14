@@ -91,7 +91,7 @@ invoke调用细节：
 
 - getMethod
 
-  1. 检查权限
+  1. 检查安全性和权限*（Java SecurityManager，检查调用者是否安全）*
   2. 通过getMethod0找到对应的方法
      1. getMethod0中调用getMethodsRecursive找方法并加入方法链表
      2. getMethodsRecursive中具体调用privateGetDeclaredMethods来寻找，首先在ReflectionData的缓存里面寻找，找不到调用getDeclaredMethods0本地方法寻找

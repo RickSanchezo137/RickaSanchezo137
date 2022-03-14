@@ -472,7 +472,7 @@ ConcurrentHashMap的具体实现在JDK 1.7及1.8的版本中有所不同，在1.
 
 - 扩容：线程发现forwarding节点、发现sizeCtl<0但数组是已经初始化的等等情况，都会进入扩容流程，volatile的变量transferIndex减stride，就是自己负责迁移的范围，然后通过cas更新transferIndex。每处理完原数组的某个节点，都会将节点标记为forwarding节点，里面有个nextTable指针指向新table，这样后续的线程可以根据这个forwarding节点去参与辅助扩容或在新table中找数据。线程完成扩容后，会令sizeCtl减一，全部完成后才能更新table的指向，并且令sizeCtl为新table的扩容阈值
 
-  链表的迁移在1.7版本上更进了一步，在遍历过程中记录hn high node和ln low node，并记录runBit和lastRun，runBit是最后一次发生变化的`哈希值&原table长度的结果`，首先是将lastRun之外的节点通过尾插法连成hn链表、ln链表，然后将lastRun接上对应的链表，最后将这hn链表放到新table的节点旧索引+旧长度的位置，ln放到新table旧索引的位置
+  链表的迁移在1.7版本上更进了一步，在遍历过程中记录hn high node和ln low node，并记录runBit和lastRun，runBit是最后一次发生变化的`哈希值&原table长度的结果`，首先是将lastRun之外的节点通过头插法连成hn链表、ln链表，然后将lastRun接上对应的链表，最后将这hn链表放到新table的节点旧索引+旧长度的位置，ln放到新table旧索引的位置
 
   ![1](imgs\JUC\1.png)
 
@@ -625,9 +625,9 @@ newCachedThreadPool的队列是SychronousQueue，向它put之后，没有消费�
 
 - *execute：三个if*
   - 调用execute方法后，首先会通过ctl计算workCount，也就是正在运行的线程数，如果小于corePoolSize，则调用addWorker(command, true)创建核心线程并加入workers执行任务，并return
-  - 如果大于corePoolSize或addWorker失败，则进入第二个if，首先判断线程池状态，接着尝试将任务加入workQueue当中，如果入队成功会先recheck一次线程池状态，如果不为RUNNING则从workQueue移除并拒绝任务，如果是RUNNING但工作线程为0则会调用addWorker(null, false)创建线程从队列中取任务执行
+  - 如果大于等于corePoolSize或addWorker失败，则进入第二个if，首先判断线程池状态，接着尝试将任务加入workQueue当中，如果入队成功会先recheck一次线程池状态，如果不为RUNNING则从workQueue移除并拒绝任务，如果是RUNNING但工作线程为0则会调用addWorker(null, false)创建线程从队列中取任务执行
   - 如果入队失败则调用addWorker(command, false)创建线程执行任务，如果失败则拒绝任务
-- addWorker*：两个作用（ps：第一个参数为firstTask，null表明从队列中取任务，第二个参数为core，true表示不能大于corePoolSize，false表示不能大于maximumPoolSize）*
+- addWorker*：两个作用（ps：第一个参数为firstTask，null表明从队列中取任务，第二个参数为core，true表示不能大于corePoolSize，false表示不能大于maximumPoolSize，true表示不能大于corePoolSize）*
   - 增加工作线程数workCount，并创建新线程加入workers执行任务
 - Worker：
   - addWorker会调用worker.run会调用runWorker方法，里面会调用firstTask.run，如果firstTask为null，则调用getTask并调用所返回对象的run方法

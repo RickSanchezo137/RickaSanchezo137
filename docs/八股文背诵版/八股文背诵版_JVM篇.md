@@ -241,7 +241,7 @@ GC Roots是一组当前时刻保持活跃的对象集合，一般包括虚拟机
 
 - 对象绝大多数都是在堆区分配的，首先会优先在Eden区分配
 - 大于`-XX:PretenureSizeThreshold`指定的大对象会直接在老年代分配，减少复制次数
-- 如果Eden区空间不够，触发一次Minor GC，将Eden区存活对象和survivor的from区的对象移动到to区，回收Eden和from的空间，并且令from区成为新的to区，并令所有被复制的对象的对象头中分代年龄加一，如果大于`-XX:MaxTenuringThreshold`则会进入老年代，最大值为15。如果复制时发现to区空间不够，则将对象
+- 如果Eden区空间不够，触发一次Minor GC，将Eden区存活对象和survivor的from区的对象移动到to区，回收Eden和from的空间，并且令from区成为新的to区，并令所有被复制的对象的对象头中分代年龄加一，如果大于`-XX:MaxTenuringThreshold`则会进入老年代，最大值为15
 - 并不一定达到`MaxTenuringThreshold`才会进入老年代，如果Survivor区中某年龄的对象大小超过Survivor空间的一半，则大于等于该年龄的对象直接进入
 - 如果minor gc时to区空间不足，会令对象进入老年代，这时需要担保老年代有足够的空间，即空间分配担保。具体操作是这样的：
   1. 首先判断老年代中最大连续可用空间大于新生代所有对象大小之和，如果是则判定为安全的，直接进行minor gc
