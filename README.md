@@ -1,4 +1,4 @@
-# Java笔记自用
+# Java笔记
 
 > [github](https://ricksanchezo137.github.io/RickaSanchezo137/)
 
