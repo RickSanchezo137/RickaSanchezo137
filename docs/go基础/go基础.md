@@ -401,12 +401,41 @@ for i := range pow
 
 总结：
 
-- 数组传参/赋值时传的是数组真实数据的拷贝，而不是地址拷贝（与Java不同）
-- 切片传参/赋值时传的是切片真实数据的拷贝，生成新的切片，但指向的底层数组一致，也就是说，是浅拷贝
+- 数组传参/赋值时传的是数组真实数据的拷贝，而不是地址拷贝（与Java不同，Java的数组是引用类型，这里是值类型）
+- 切片传参/赋值时传的是切片的拷贝，生成新的切片，但指向的底层数组一致，也就是说，是浅拷贝（切片是引用类型）
 - append后会新生成一个底层数组并令切片的Pointer指向它
 - 切片首元素的地址==数组首元素的地址==数组地址
 
-**在go函数中参数的传递可以是传值（对象的复制，需要开辟新的空间来存储该新对象）和传引用（指针的复制，和原来的指针指向同一个对象），建议使用指针，原因有两个：能够改变参数的值，避免大对象的复制操作节省内存** *（上述实验实际上都是传值）*
+**在go函数中参数的传递可以是传值（对象的复制，需要开辟新的空间来存储该新对象）和传引用（指针的复制，和原来的指针指向同一个对象，但两个指针本身的内存地址不一致，只是指向的区域一致），建议使用指针，原因有两个：能够改变参数的值，避免大对象的复制操作节省内存** *（上述实验实际上都是值传递，都有复制过程）*
+
+### go只有值传递
+
+基于上面的实验得出结论：**go只有值传递**
+
+首先明确值传递的定义：传递时会将数据复制一份；而引用传递：可以直接传递指针
+
+区别在哪呢？假如有一个函数func foo(ptr *int)，我们有下面的函数：
+
+```go
+func main() {
+    i := 123
+    ptr := &i
+	foo(ptr)
+    fmt.Println(*ptr)
+}
+
+func foo(ptr *int) {
+    i := 234
+    ptr = &i
+}
+```
+
+如果是引用传递，这里直接传指针，则会打印234，实际上可以尝试一下，打印的是123
+
+说明传递的是指针本身的一个拷贝，也就是，**函数内外指针本身存放在不同的内存地址，但它们指向的内存地址是一致的**，这时去修改函数内的指针指向的内存地址，自然影响不到函数外的指针，所以是值传递
+
+> - 浅拷贝的时候，指针本身也会被拷贝，区分开指针本身地址和它的指向地址
+> - Java中同理，只有值传递，引用传递的时候会生成一个引用的副本，但指向地址一致
 
 ### 映射（Map）
 
@@ -445,3 +474,758 @@ elem, ok = m[key]
 ```
 elem, ok := m[key]
 ```
+
+## 函数
+
+### 函数值
+
+**函数也是值**。它们可以像其它值一样传递
+
+函数值可以用作函数的参数或返回值
+
+```go
+package main
+
+import (
+	"fmt"
+	"math"
+)
+
+func compute(fn func(float64, float64) float64) float64 {
+	return fn(3, 4)
+}
+func add(x, y float64) float64 {
+	return x + y
+}
+func main() {
+	hypot := func(x, y float64) float64 {
+		return math.Sqrt(x*x + y*y)
+	}
+	fmt.Println(hypot(5, 12))
+
+	fmt.Println(compute(hypot))
+	fmt.Println(compute(add))
+}
+```
+
+### 闭包
+
+> [https://www.sulinehk.com/post/golang-closure-details/](https://www.sulinehk.com/post/golang-closure-details/)
+
+- 闭包是一个函数值，它引用了其函数体之外的变量*（除自身局部变量之外的变量）*。该函数可以访问并赋予其引用的变量的值，换句话说，该函数被这些变量“绑定”在一起，被引用的变量将和这个函数一同存在
+- 闭包是函数和相关引用环境组成的实体
+
+```go
+package main
+
+import "fmt"
+
+func adder() func(int) int {
+	sum := 0
+    /* 下面的函数，即adder()的返回值，为一个闭包；因为它引用了自由变量sum，与sum绑定，且能通过函数值作为一个实体存在
+     */
+	return func(x int) int {
+		sum += x
+		return sum
+	}
+}
+
+func main() {
+    // 两个闭包实体：pos、neg
+	pos, neg := adder(), adder()
+	for i := 0; i < 10; i++ {
+		fmt.Println(
+			pos(i),
+			neg(-2*i),
+		)
+	}
+}
+```
+
+> 类比Java中的内部类对象：引用某外部变量；与外部变量绑定；作为方法和引用环境组成的实体存在*（Java的方法不能作为类似函数值的东西来保存，因此可以采用匿名内部类的方式，如下，方法为add，看作num和add绑定）*
+>
+> ```java
+> public class Main{
+>     public static void main(String[] args){
+>         Outer o = new Outer();
+>         // in是一个闭包
+>         Inner in = o.inner();
+>         in.add();
+>         in.add();
+>         in.add();
+>         System.out.println(o.num); // 3 
+>         //
+>         o = null;
+>         System.out.println(o);
+>         System.out.println(in);  // o==null, in!=null, 内存泄漏
+>     }
+> }
+> interface Inner{
+>     void add();
+> }
+> class Outer{
+>     public int num;
+>     public Inner inner(){
+>         return new Inner() {
+>             @Override
+>             public void add() {
+>                 num++;
+>             }
+>         };
+>     }
+> }
+> ```
+
+## 方法
+
+Go 没有类。不过你可以为结构体类型定义方法
+
+方法就是一类带特殊的 **接收者** 参数的函数
+
+> 方法接收者在它自己的参数列表内，位于 `func` 关键字和方法名之间
+>
+> 在此例中，`Abs` 方法拥有一个名为 `v`，类型为 `Vertex` 的接收者
+>
+> ```go
+> package main
+> 
+> import (
+> 	"fmt"
+> 	"math"
+> )
+> 
+> type Vertex struct {
+> 	X, Y float64
+> }
+> 
+> func (v Vertex) Abs() float64 {
+> 	return math.Sqrt(v.X*v.X + v.Y*v.Y)
+> }
+> 
+> func main() {
+> 	v := Vertex{3, 4}
+> 	fmt.Println(v.Abs())
+> }
+> ```
+
+接收者的类型定义和方法声明必须在同一包内；不能为内建类型声明方法
+
+> 非结构体
+>
+> ```go
+> package main
+> 
+> import (
+> 	"fmt"
+> 	"math"
+> )
+> 
+> type MyFloat float64
+> 
+> func (f MyFloat) Abs() float64 {
+> 	if f < 0 {
+> 		return float64(-f)
+> 	}
+> 	return float64(f)
+> }
+> 
+> func main() {
+> 	f := MyFloat(-math.Sqrt2)
+> 	fmt.Println(f.Abs())
+> }
+> ```
+
+### 指针接收者
+
+```go
+package main
+
+import (
+	"fmt"
+	"math"
+)
+
+type Vertex struct {
+	X, Y float64
+}
+
+func (v Vertex) Abs() float64 {
+	return math.Sqrt(v.X*v.X + v.Y*v.Y)
+}
+
+// 
+func (v *Vertex) Scale(f float64) {
+	v.X = v.X * f
+	v.Y = v.Y * f
+}
+
+func main() {
+	v := Vertex{3, 4}
+	v.Scale(10)
+	fmt.Println(v.Abs())  // 50
+}
+```
+
+注意，如果将此处的*Vertex改成Vertex，结果为5，因为go的值传递和Java不一样，会新生成一个浅拷贝对象；引用传递则是拷贝地址
+
+### 方法即函数&隐式的处理
+
+- 方法即函数：方法都可以写成函数的形式
+
+  ```go
+  package main
+  
+  import (
+  	"fmt"
+  	"math"
+  )
+  
+  type Vertex struct {
+  	X, Y float64
+  }
+  
+  func Abs(v Vertex) float64 {
+  	return math.Sqrt(v.X*v.X + v.Y*v.Y)
+  }
+  
+  func Scale(v *Vertex, f float64) {
+  	v.X = v.X * f
+  	v.Y = v.Y * f
+  }
+  
+  func main() {
+  	v := Vertex{3, 4}
+  	Scale(&v, 10)
+  	fmt.Println(Abs(v))
+  }
+  ```
+
+  这里的Scale方法的Vertex必须写成*Vertex，否则就是值传递了，创建一个Vertex副本
+
+  但在方法的写法中却不用，为什么？
+
+- 隐式的处理：在方法的写法中，会隐式转换成指针的形式
+
+  比较前两个程序，你大概会注意到带指针参数的函数必须接受一个指针：
+
+  ```go
+  var v Vertex
+  ScaleFunc(v, 5)  // 编译错误！
+  ScaleFunc(&v, 5) // OK
+  ```
+
+  而以指针为接收者的方法被调用时，接收者既能为值又能为指针：
+
+  ```go
+  var v Vertex
+  v.Scale(5)  // OK
+  p := &v
+  p.Scale(10) // OK
+  ```
+
+  对于语句 `v.Scale(5)`，即便 `v` 是个值而非指针，带指针接收者的方法也能被直接调用。 也就是说，由于 `Scale` 方法有一个指针接收者，为方便起见，Go 会将语句 `v.Scale(5)` 编译为 `(&v).Scale(5)`
+
+## 接口
+
+```go
+package main
+
+import (
+	"fmt"
+	"math"
+)
+
+type Abser interface {
+	Abs() float64
+}
+
+func main() {
+	var a Abser
+	f := MyFloat(-math.Sqrt2)
+	v := Vertex{3, 4}
+
+	a = f  // a MyFloat 实现了 Abser
+	a = &v // a *Vertex 实现了 Abser
+
+
+
+	fmt.Println(a.Abs())
+}
+
+type MyFloat float64
+
+func (f MyFloat) Abs() float64 {
+	if f < 0 {
+		return float64(-f)
+	}
+	return float64(f)
+}
+
+type Vertex struct {
+	X, Y float64
+}
+
+func (v *Vertex) Abs() float64 {
+	return math.Sqrt(v.X*v.X + v.Y*v.Y)
+}
+```
+
+类型通过实现一个接口的所有方法来实现该接口。既然无需专门显式声明，也就没有“implements”关键字
+
+隐式接口从接口的实现中解耦了定义，这样接口的实现可以出现在任何包中，无需提前准备
+
+因此，也就无需在每一个实现上增加新的接口名称，这样同时也鼓励了明确的接口定义
+
+```go
+package main
+
+import "fmt"
+
+type I interface {
+	M()
+}
+
+type T struct {
+	S string
+}
+
+// 此方法表示类型 T 实现了接口 I，但我们无需显式声明此事。
+func (t T) M() {
+	fmt.Println(t.S)
+}
+
+func main() {
+	var i I = T{"hello"}
+	i.M()
+}
+```
+
+### 接口值
+
+接口也是值。它们可以像其它值一样传递；接口值可以用作函数的参数或返回值。
+
+在内部，接口值可以看做包含值和具体类型的元组：`(value, type)`
+
+接口值保存了一个具体底层类型的具体值；接口值调用方法时会执行其底层类型的同名方法。见describe方法：
+
+```go
+package main
+
+import (
+	"fmt"
+	"math"
+)
+
+type I interface {
+	M()
+}
+
+type T struct {
+	S string
+}
+
+func (t *T) M() {
+	fmt.Println(t.S)
+}
+
+type F float64
+
+func (f F) M() {
+	fmt.Println(f)
+}
+
+func main() {
+	var i I
+
+	i = &T{"Hello"}
+	describe(i)
+	i.M()
+
+	i = F(math.Pi)
+	describe(i)
+	i.M()
+}
+
+func describe(i I) {
+	fmt.Printf("(%v, %T)\n", i, i)
+}
+```
+
+### 空接口
+
+指定了零个方法的接口值被称为 *空接口：*
+
+```go
+interface{}
+```
+
+空接口可保存任何类型的值。（因为每个类型都至少实现了零个方法）
+
+空接口被用来处理未知类型的值。例如，`fmt.Print` 可接受类型为 `interface{}` 的任意数量的参数
+
+### 类型断言
+
+断言接口变量是否为某个类型，有点像instanceof
+
+```go
+t := i.(T)
+```
+
+该语句断言接口值 `i` 保存了具体类型 `T`，并将其底层类型为 `T` 的值赋予变量 `t`
+
+若 `i` 并未保存 `T` 类型的值，该语句就会触发一个恐慌（panic）
+
+为了 **判断** 一个接口值是否保存了一个特定的类型，类型断言可返回两个值：其底层值以及一个报告断言是否成功的布尔值
+
+```go
+t, ok := i.(T)
+```
+
+若 `i` 保存了一个 `T`，那么 `t` 将会是其底层值，而 `ok` 为 `true`
+
+否则，`ok` 将为 `false` 而 `t` 将为 `T` 类型的零值，程序并不会产生恐慌
+
+> 请注意这种语法和读取一个映射时的相同之处
+
+### 类型选择
+
+```go
+switch v := i.(type) {
+case T:
+    // v 的类型为 T
+case S:
+    // v 的类型为 S
+default:
+    // 没有匹配，v 与 i 的类型相同
+}
+```
+
+### Stringer
+
+> 类似Java重写toString
+
+`fmt`包中定义的 `Stringer`是最普遍的接口之一
+
+```go
+type Stringer interface {
+    String() string
+}
+```
+
+`Stringer` 是一个可以用字符串描述自己的类型。`fmt` 包（还有很多包）都通过此接口来打印值
+
+### 错误
+
+Go 程序使用 `error` 值来表示错误状态
+
+与 `fmt.Stringer` 类似，`error` 类型是一个内建接口：
+
+```go
+type error interface {
+    Error() string
+}
+```
+
+（与 `fmt.Stringer` 类似，`fmt` 包在打印值时也会满足 `error`）
+
+通常函数会返回一个 `error` 值，调用的它的代码应当判断这个错误是否等于 `nil` 来进行错误处理。
+
+```go
+i, err := strconv.Atoi("42")
+if err != nil {
+    fmt.Printf("couldn't convert number: %v\n", err)
+    return
+}
+fmt.Println("Converted integer:", i)
+```
+
+例子：
+
+```go
+package main
+
+import (
+	"fmt"
+	"time"
+)
+
+type MyError struct {
+	When time.Time
+	What string
+}
+
+func (e *MyError) Error() string {
+	return fmt.Sprintf("at %v, %s",
+		e.When, e.What)
+}
+
+func run() error {
+	return &MyError{
+		time.Now(),
+		"it didn't work",
+	}
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Println(err)
+	}
+}
+```
+
+### Reader
+
+`io` 包指定了 `io.Reader` 接口，它表示从数据流的末尾进行读取
+
+Go 标准库包含了该接口的许多实现，包括文件、网络连接、压缩和加密等等
+
+`io.Reader` 接口有一个 `Read` 方法：
+
+```go
+func (T) Read(b []byte) (n int, err error)
+```
+
+`Read` 用数据填充给定的字节切片并返回填充的字节数和错误值。在遇到数据流的结尾时，它会返回一个 `io.EOF` 错误
+
+示例代码创建了一个 strings.Reader 并以每次 8 字节的速度读取它的输出
+
+```go
+package main
+
+import (
+	"fmt"
+	"io"
+	"strings"
+)
+
+func main() {
+	r := strings.NewReader("Hello, Reader!")
+
+	b := make([]byte, 8)
+	for {
+		n, err := r.Read(b)
+		fmt.Printf("n = %v err = %v b = %v\n", n, err, b)
+		fmt.Printf("b[:n] = %q\n", b[:n])
+		if err == io.EOF {
+			break
+		}
+	}
+}
+```
+
+# goroutine
+
+## goroutine
+
+轻量级线程、协程、用户级线程
+
+```go
+go f(x, y, z)
+```
+
+会启动一个新的 Go 程并执行
+
+```go
+f(x, y, z)
+```
+
+`f`, `x`, `y` 和 `z` 的求值发生在当前的 goroutine中，而 `f` 的执行发生在新的 Go 程中
+
+Go 程在相同的地址空间中运行，因此在访问共享的内存时必须进行同步。sync 包提供了这种能力，不过在 Go 中并不经常用到，因为还有其它的办法
+
+## 信道
+
+信道是带有类型的管道，你可以通过它用信道操作符 `<-` 来发送或者接收值
+
+```go
+ch <- v    // 将 v 发送至信道 ch
+v := <-ch  // 从 ch 接收值并赋予 v
+```
+
+> 箭头就是数据流的方向
+
+和映射与切片一样，信道在使用前必须创建：
+
+```go
+ch := make(chan int)
+// ch := make(chan int, 2) // 带缓冲的
+```
+
+默认情况下，发送和接收操作在另一端准备好之前都会**阻塞**。这使得 goroutine 可以在没有显式的锁或竞态变量的情况下进行同步
+
+```go
+package main
+
+import "fmt"
+
+func sum(s []int, c chan int) {
+	sum := 0
+	for _, v := range s {
+		sum += v
+	}
+	c <- sum // 将和送入 c
+}
+
+func main() {
+	s := []int{7, 2, 8, -9, 4, 0}
+
+	c := make(chan int)
+	go sum(s[:len(s)/2], c)
+	go sum(s[len(s)/2:], c)
+	x, y := <-c, <-c // 从 c 中接收
+
+	fmt.Println(x, y, x+y)
+}
+```
+
+> 主线程的阻塞会视为死锁
+
+> **为什么卡住不显示？记得问**
+>
+> ```go
+> package main
+> 
+> import "fmt"
+> 
+> func main() {
+> 	go func(){
+> 		ch := make(chan int, 2)
+> 		ch <- 1
+> 		ch <- 2
+> 		fmt.Println(<-ch)
+> 		fmt.Println(<-ch)
+> 	}()
+> }
+> ```
+
+### range 和 close
+
+发送者可通过 `close` 关闭一个信道来表示没有需要发送的值了。**接收者**可以通过为接收表达式分配第二个参数来测试信道是否被关闭：若没有值可以接收且信道已被关闭，那么在执行完
+
+```
+v, ok := <-ch
+```
+
+之后 `ok` 会被设置为 `false`
+
+循环 `for i := range c` 会不断从信道接收值，直到它被关闭
+
+- 只有发送者才能关闭信道，而接收者不能。向一个已经关闭的信道发送数据会引发程序恐慌（panic）
+- 信道与文件不同，通常情况下无需关闭它们。只有在必须告诉接收者不再有需要发送的值时才有必要关闭，例如终止一个 `range` 循环
+
+### select
+
+`select` 语句使一个 Go 程可以等待多个通信操作
+
+`select` 会阻塞到某个分支可以继续执行为止，这时就会执行该分支。当多个分支都准备好时会随机选择一个执行
+
+```go
+package main
+
+import "fmt"
+
+func fibonacci(c, quit chan int) {
+	x, y := 0, 1
+	for {
+		select {
+		case c <- x:
+			x, y = y, x+y
+		case <-quit:
+			fmt.Println("quit")
+			return
+		}
+	}
+}
+
+func main() {
+	c := make(chan int)
+	quit := make(chan int)
+	go func() {
+		for i := 0; i < 10; i++ {
+			fmt.Println(<-c)
+		}
+		quit <- 0
+	}()
+	fibonacci(c, quit)
+}
+```
+
+当 `select` 中的其它分支都没有准备好时，`default` 分支就会执行
+
+为了在尝试发送或者接收时不发生阻塞，可使用 `default` 分支：
+
+```go
+select {
+case i := <-c:
+    // 使用 i
+default:
+    // 从 c 中接收会阻塞时执行
+}
+```
+
+## sync.Mutex
+
+我们已经看到信道非常适合在各个 goroutine 间进行通信
+
+但是如果我们并不需要通信呢？比如说，若我们只是想保证每次只有一个 goroutine 能够访问一个共享的变量，从而避免冲突？
+
+Go 标准库中提供了 sync.Mutex 互斥锁类型及其两个方法：
+
+- `Lock`
+- `Unlock`
+
+我们可以通过在代码前调用 `Lock` 方法，在代码后调用 `Unlock` 方法来保证一段代码的互斥执行。参见 `Inc` 方法
+
+```go
+package main
+
+import (
+	"fmt"
+	"sync"
+	"time"
+)
+
+// SafeCounter 的并发使用是安全的。
+type SafeCounter struct {
+	v   map[string]int
+	mux sync.Mutex
+}
+
+// Inc 增加给定 key 的计数器的值。
+func (c *SafeCounter) Inc(key string) {
+	c.mux.Lock()
+	// Lock 之后同一时刻只有一个 goroutine 能访问 c.v
+	c.v[key]++
+	c.mux.Unlock()
+}
+
+// Value 返回给定 key 的计数器的当前值。
+func (c *SafeCounter) Value(key string) int {
+	c.mux.Lock()
+	// Lock 之后同一时刻只有一个 goroutine 能访问 c.v
+	defer c.mux.Unlock()
+	return c.v[key]
+}
+
+func main() {
+	c := SafeCounter{v: make(map[string]int)}
+	for i := 0; i < 1000; i++ {
+		go c.Inc("somekey")
+	}
+
+	time.Sleep(time.Second)
+	fmt.Println(c.Value("somekey"))
+}
+```
+
+## sync.WaitGroup
+
+sync.WaitGroup：等待子协程结束
+
+- Add：++
+- Wait：Wait Until all end
+- Done：--
+
+**注意！**：在开辟子协程之前就Add，如果在子协程内Add，即Add和Done都在子协程内，可能在Add之前主协程就会判断到等待协程数为0，这个子协程就失效了
+
+> [https://tour.go-zh.org/concurrency/10](https://tour.go-zh.org/concurrency/10)
