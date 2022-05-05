@@ -10,6 +10,37 @@
 
 - 类型声明在后
 
+- 短变量声明：`a := 1`，只能用在函数内
+
+- 命令行参数：os包，os.Args，是一个切片
+
+- 简单io
+
+  - bufio包：
+
+    - `input := bufio.NewScanner(os.Stdin)`
+    - `input.Scan()，读下一行，返回是否有下一行`
+    - `input.Text()，显示读取内容`
+
+  - `f, err := io.Open(fileName)`
+
+  - `data, err := ioutil.ReadFile(filename)`：一次性读取全部文件
+
+  - 格式化
+
+    ```go
+    %d          十进制整数
+    %x, %o, %b  十六进制，八进制，二进制整数。
+    %f, %g, %e  浮点数： 3.141593 3.141592653589793 3.141593e+00
+    %t          布尔：true或false
+    %c          字符（rune） (Unicode码点)
+    %s          字符串
+    %q          带双引号的字符串"abc"或带单引号的字符'c'
+    %v          变量的自然形式（natural format）
+    %T          变量的类型
+    %%          字面上的百分号标志（无操作数）
+    ```
+
 - 返回值可命名
 
   ```go
@@ -1229,3 +1260,75 @@ sync.WaitGroup：等待子协程结束
 **注意！**：在开辟子协程之前就Add，如果在子协程内Add，即Add和Done都在子协程内，可能在Add之前主协程就会判断到等待协程数为0，这个子协程就失效了
 
 > [https://tour.go-zh.org/concurrency/10](https://tour.go-zh.org/concurrency/10)
+
+# goWeb
+
+## net包
+
+简单的使用：`resp, err := http.Get(url)`，resp为返回的响应
+
+```go
+// Fetch prints the content found at a URL.
+package main
+
+import (
+	"fmt"
+	"io/ioutil"
+	"net/http"
+	"os"
+)
+
+func main() {
+	for _, url := range os.Args[1:] {
+		resp, err := http.Get(url)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "fetch: %v\n", err)
+			os.Exit(1)
+		}
+		b, err := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "fetch: reading %s: %v\n", url, err)
+			os.Exit(1)
+		}
+		fmt.Printf("%s", b)
+	}
+}
+```
+
+- resp.Body：响应体
+- resp.Status：状态码
+
+## 简单web服务
+
+Go语言的内置库使得写一个web服务器变得异常简单
+
+```go
+// Server1 is a minimal "echo" server.
+package main
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+)
+
+func main() {
+	http.HandleFunc("/", handler) // each request calls handler
+	log.Fatal(http.ListenAndServe("localhost:8000", nil))
+}
+
+// handler echoes the Path component of the request URL r.
+func handler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "URL.Path = %q\n", r.URL.Path)
+}
+```
+
+- main函数将所有发送到 **/** 路径下的请求和handler函数关联起来，**/** 开头的请求其实就是所有发送到当前站点上的请求，服务监听8000端口
+- 发送到这个服务的“请求”是一个http.Request类型的对象，这个对象中包含了请求中的一系列相关字段，其中就包括我们需要的URL
+- 当请求到达服务器时，这个请求会被传给handler函数来处理，这个函数会将/hello这个路径从请求的URL中解析出来，然后把其发送到响应中，这里我们用的是标准输出流的fmt.Fprintf
+- 服务器每一次接收请求处理时都会另起一个goroutine，这样服务器就可以同一时间处理多个请求
+
+> Linux/Mac OS下，go run ...的末尾加&进行后台运行
+
+[取参数](https://blog.csdn.net/kenkao/article/details/47857757)
