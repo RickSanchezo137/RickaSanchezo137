@@ -79,6 +79,10 @@
 
 - defer关键字：推迟执行，defer的函数先完成求值，但直到外层函数返回时才会被调用
 
+  > panic之后也会调用
+  >
+  > 在Go的panic机制中，延迟函数的调用在释放堆栈信息之前
+
   ```go
   package main
   
@@ -117,12 +121,38 @@
 
 ### 简单io
 
-- fmt
+- fmt：Scanf、Sprintf等等
+
 - bufio包：
-- `input := bufio.NewScanner(os.Stdin)`
-  - `input.Scan()，读下一行，返回是否有下一行`
-  - `input.Text()，显示读取内容`
+  - `input := bufio.NewScanner(os.Stdin)`
+    - `input.Scan()，读下一行，返回是否有下一行`
+      - `input.Text()，显示读取内容`
+
+  ```go
+  func main() {
+  	cache := make(map[string]int)
+  	f, err := os.Open("test.txt")
+  	if err != nil {
+  		return
+  	}
+  	input := bufio.NewScanner(f)
+  	input.Split(bufio.ScanWords)  // 按单词读取，而不是按行
+  	for {
+  		if !input.Scan() {
+  			break
+  		}
+  		word := input.Text()
+  		cache[word]++
+  	}
+  	fmt.Println("word\tcount")
+  	for w, c := range cache {
+  		fmt.Printf("%v\t%v\n", w, c)
+  	}
+  }
+  ```
+
 - `f, err := os.Open(fileName)`
+
 - `data, err := ioutil.ReadFile(filename)`：一次性读取全部文件
 
 ### 格式化
@@ -259,6 +289,38 @@ func main() {
 ```
 
 > 如果我们有一个指向结构体的指针 `p`，那么可以通过 `(*p).X` 来访问其字段 `X`。不过这么写太啰嗦了，所以语言也允许我们使用隐式间接引用，直接写 `p.X` 就可以
+
+结构体成员名字是以大写字母开头的，那么该成员就是导出的；这是Go语言导出规则决定的。一个结构体可能同时包含导出和未导出的成员。**但如果struct嵌套了，那么即使被嵌套在内部的struct名称首字母小写，其他包也能访问到它里面首字母大写的字段**
+
+结构体全体成员都是用==可比较的，那么结构体也可比较，比较的是每个成员的值*（不同于 Java比较地址值）*
+
+> 匿名成员语法糖：匿名的嵌套结构体，访问时可以直接访问成员
+>
+> 例如：
+>
+> ```go
+> // Charcount computes counts of Unicode characters.
+> package main
+> 
+> import (
+> 	"fmt"
+> )
+> 
+> type S struct {
+> 	X, Y int
+> 	SS
+> }
+> 
+> type SS struct {
+> 	Z int
+> }
+> 
+> func main() {
+> 	t := S{1, 2, SS{3}}
+> 	t.Z = 33
+> 	fmt.Println(t)
+> }
+> ```
 
 **赋值**
 
@@ -574,6 +636,37 @@ func foo(ptr *int) {
 > - 浅拷贝的时候，指针本身也会被拷贝，区分开指针本身地址和它的指向地址
 > - Java中同理，只有值传递，引用传递的时候会生成一个引用的副本，但指向地址一致
 
+**for循环的一个注意点**
+
+```go
+var rmdirs []func()
+for _, d := range tempDirs() {
+	dir := d // NOTE: necessary!
+	os.MkdirAll(dir, 0755) // creates parent directories too
+	rmdirs = append(rmdirs, func() {
+		os.RemoveAll(dir)
+	})
+}
+// ...do some work…
+for _, rmdir := range rmdirs {
+	rmdir() // clean up
+}
+```
+
+你可能会感到困惑，为什么要在循环体中用循环变量d赋值一个新的局部变量，而不是像下面的代码一样直接使用循环变量dir。需要注意，下面的代码是错误的
+
+```go
+var rmdirs []func()
+for _, dir := range tempDirs() {
+	os.MkdirAll(dir, 0755)
+	rmdirs = append(rmdirs, func() {
+		os.RemoveAll(dir) // NOTE: incorrect!
+	})
+}
+```
+
+问题的原因在于循环变量的作用域。在上面的程序中，for循环语句引入了新的词法块，循环变量dir在这个词法块中被声明。在该循环中生成的所有函数值都共享相同的循环变量。需要注意，函数值中记录的是循环变量的内存地址，而不是循环变量某一时刻的值。以dir为例，后续的迭代会不断更新dir的值**（修改的是dir对应的内存地址上面的值）**，当删除操作执行时，for循环已完成，dir中存储的值等于最后一次迭代的值。这意味着，每次对os.RemoveAll的调用删除的都是相同的目录
+
 ### 映射（Map）
 
 在映射 `m` 中插入或修改元素：
@@ -611,6 +704,10 @@ elem, ok = m[key]
 ```
 elem, ok := m[key]
 ```
+
+常常以空结构体作为value来实现set，即：
+
+map[string]struct{}{"key1":struct{}{}}
 
 ### 字符串和BYTE切片
 
@@ -682,7 +779,267 @@ unicode包提供了IsDigit、IsLetter、IsUpper和IsLower等类似功能，它�
 
 > strings包也有类似的函数，它们是ToUpper和ToLower
 
-## 函数
+### JSON
+
+标准库中的encoding/json、encoding/xml、encoding/asn1等包提供支持
+
+> Protocol Buffers的支持由 github.com/golang/protobuf 包提供
+
+结构体slice转为JSON的过程叫编组（marshaling）。编组通过调用json.Marshal函数完成：
+
+```go
+data, err := json.Marshal(movies)
+if err != nil {
+	log.Fatalf("JSON marshaling failed: %s", err)
+}
+fmt.Printf("%s\n", data)
+```
+
+json.MarshalIndent函数将产生整齐缩进的输出。该函数有两个额外的字符串参数用于表示每一行输出的前缀和每一个层级的缩进
+
+在编码时，默认使用Go语言结构体的成员名字作为JSON的对象（通过reflect反射技术）。**只有导出的结构体成员才会被编码**
+
+#### 成员Tag
+
+结构体成员Tag可以指定编码成json时以什么作为名字。一个结构体成员Tag是和在编译阶段关联到该成员的元信息字符串：
+
+```bash
+Year  int  `json:"released"`
+Color bool `json:"color,omitempty"`
+```
+
+成员Tag中json对应值的第一部分用于指定JSON对象的名字，一个额外的omitempty选项，表示当Go语言结构体成员为空或零值时不生成该JSON对象（这里false为零值）
+
+编码的逆操作是解码，对应将JSON数据解码为Go语言的数据结构，Go语言中一般叫unmarshaling，通过json.Unmarshal函数完成
+
+```go
+var titles []struct{ Title string }
+if err := json.Unmarshal(data, &titles); err != nil {
+	log.Fatalf("JSON unmarshaling failed: %s", err)
+}
+fmt.Println(titles) // "[{Casablanca} {Cool Hand Luke} {Bullitt}]"
+```
+
+#### web服务中的 json
+
+许多web服务都提供JSON接口，通过HTTP接口发送JSON格式请求并返回JSON格式的信息。为了说明这一点，可通过Github的issue查询服务来演示类似的用法。首先，我们要定义合适的类型和常量：
+
+```go
+// Package github provides a Go API for the GitHub issue tracker.
+// See https://developer.github.com/v3/search/#search-issues.
+package github
+
+import "time"
+
+const IssuesURL = "https://api.github.com/search/issues"
+
+type IssuesSearchResult struct {
+	TotalCount int `json:"total_count"`
+	Items          []*Issue
+}
+
+type Issue struct {
+	Number    int
+	HTMLURL   string `json:"html_url"`
+	Title     string
+	State     string
+	User      *User
+	CreatedAt time.Time `json:"created_at"`
+	Body      string    // in Markdown format
+}
+
+type User struct {
+	Login   string
+	HTMLURL string `json:"html_url"`
+}
+```
+
+SearchIssues函数发出一个HTTP请求，然后解码返回的JSON格式的结果。因为用户提供的查询条件可能包含类似`?`和`&`之类的特殊字符，为了避免对URL造成冲突，用url.QueryEscape来对查询中的特殊字符进行转义操作。
+
+```go
+package github
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+// SearchIssues queries the GitHub issue tracker.
+func SearchIssues(terms []string) (*IssuesSearchResult, error) {
+	q := url.QueryEscape(strings.Join(terms, " "))
+	resp, err := http.Get(IssuesURL + "?q=" + q)
+	if err != nil {
+		return nil, err
+	}
+
+	// We must close resp.Body on all execution paths.
+	// (Chapter 5 presents 'defer', which makes this simpler.)
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("search query failed: %s", resp.Status)
+	}
+
+	var result IssuesSearchResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		resp.Body.Close()
+		return nil, err
+	}
+	resp.Body.Close()
+	return &result, nil
+}
+```
+
+使用了基于流式的解码器json.Decoder，它可以从一个输入流解码JSON数据。还有一个针对输出流的json.Encoder编码对象
+
+```go
+// Issues prints a table of GitHub issues matching the search terms.
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+
+	"github"
+)
+
+func main() {
+	result, err := github.SearchIssues(os.Args[1:])
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%d issues:\n", result.TotalCount)
+	for _, item := range result.Items {
+		fmt.Printf("#%-5d %9.9s %.55s\n",
+			item.Number, item.User.Login, item.Title)
+	}
+}
+```
+
+通过命令行参数指定检索条件。下面的命令是查询Go语言项目中和JSON解码相关的问题，还有查询返回的结果：
+
+```bash
+$ go build gopl.io/ch4/issues
+$ ./issues repo:golang/go is:open json decoder
+13 issues:
+#5680    eaigner encoding/json: set key converter on en/decoder
+#6050  gopherbot encoding/json: provide tokenizer
+#8658  gopherbot encoding/json: use bufio
+#8462  kortschak encoding/json: UnmarshalText confuses json.Unmarshal
+#5901        rsc encoding/json: allow override type marshaling
+#9812  klauspost encoding/json: string tag not symmetric
+#7872  extempora encoding/json: Encoder internally buffers full output
+#9650    cespare encoding/json: Decoding gives errPhase when unmarshalin
+#6716  gopherbot encoding/json: include field name in unmarshal error me
+#6901  lukescott encoding/json, encoding/xml: option to treat unknown fi
+#6384    joeshaw encoding/json: encode precise floating point integers u
+#6647    btracey x/tools/cmd/godoc: display type kind of each named type
+#4237  gjemiller encoding/base64: URLEncoding padding is optional
+```
+
+> [https://www.k8stech.net/gopl/chapter4/ch4-05/](https://www.k8stech.net/gopl/chapter4/ch4-05/)练习题：
+>
+> ```go
+> // Package github provides a Go API for the GitHub issue tracker.
+> // See https://developer.github.com/v3/search/#search-issues.
+> package github
+> 
+> import "time"
+> 
+> const CreateURL = "https://api.github.com/repos/RickSanchezo137/RickaSanchezo137/issues"
+> type CreateReq struct {
+> 	Title string `json:"title"`
+> 	Labels []string `json:"labels"`
+> 	Body string `json:body`
+> }
+> type CreateRes struct {
+> 	Number int `json:"number"`
+> 	CreatedAt time.Time `json:"created_at"`
+> 	ClosedAt time.Time `json:"closed_at"`
+> 	UpdatedAt time.Time `json:"updated_at"`
+> 	Title string `json:"title"`
+> 	HTMLURL string `json:"html_url"`
+> 	State string `json:"state"`
+> 	Labels []map[string]interface{} `json:"labels"`
+> }
+> ```
+>
+> ```go
+> package github
+> 
+> import (
+> 	"encoding/json"
+> 	"fmt"
+> 	"net/http"
+> 	"net/url"
+> 	"strings"
+> 	"bytes"
+> )
+> 
+> func CreateIssue(labels []string, title []string, context string) (*CreateRes, error) {
+> 	ql := url.QueryEscape(strings.Join(labels, " "))
+> 	qt := url.QueryEscape(strings.Join(title, " "))
+> 	body := CreateReq{qt, []string{ql}, context}
+> 	reqData, err := json.Marshal(body)
+> 	if err != nil {
+> 		return nil, err
+> 	}
+> 	client := &http.Client{}
+> 	req, err := http.NewRequest("POST", CreateURL, bytes.NewReader(reqData))
+> 	req.Header.Set("Authorization", "token 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")
+> 	req.Header.Set("Accept", "application/vnd.github.v3+json")
+> 	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+> 	resp, err := client.Do(req)
+> 	defer resp.Body.Close()
+> 	if err != nil {
+> 		return nil, err
+> 	}
+> 	if resp.StatusCode != 201 {
+> 		return nil, fmt.Errorf("create failure: %s", resp.Status)
+> 	}
+> 	fmt.Println("create success")
+> 	var result CreateRes
+> 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+> 		return nil, err
+> 	}
+> 	return &result, nil
+> }
+> ```
+>
+> ```go
+> // Issues prints a table of GitHub issues matching the search terms.
+> package main
+> 
+> import (
+> 	"fmt"
+> 	"log"
+> 	"github"
+> 	"encoding/json"
+> )
+> 
+> func main() {
+> 	//body=Describe+the+problem
+> 	labels := []string{"bug"}
+> 	title := []string{"New", "bug", "report"}
+> 	resp, err := github.CreateIssue(labels, title, "This is a bug")
+> 	if err != nil {
+> 		log.Fatal(err)
+> 		return
+> 	}
+> 	data, err := json.MarshalIndent(resp, "", "\t")
+> 	if err != nil {
+> 		log.Fatalf("JSON marshaling failed: %s", err)
+> 	}
+> 	fmt.Printf("%s\n", data)
+> }
+> ```
+
+#### 文本/HTML模板
+
+[https://www.k8stech.net/gopl/chapter4/ch4-06/](https://www.k8stech.net/gopl/chapter4/ch4-06/)
 
 ### 函数值
 
@@ -1102,7 +1459,7 @@ interface{}
 t := i.(T)
 ```
 
-该语句断言接口值 `i` 保存了具体类型 `T`，并将其底层类型为 `T` 的值赋予变量 `t`
+该语句断言接口值 `i` 保存了具体类型 `T`，并**将其底层类型为 `T` 的值赋予变量 `t`**
 
 若 `i` 并未保存 `T` 类型的值，该语句就会触发一个恐慌（panic）
 
@@ -1244,6 +1601,20 @@ func main() {
 }
 ```
 
+### 常用接口
+
+- FLAG.VALUE
+
+  [FLAG.VALUE接口](https://www.k8stech.net/gopl/chapter7/ch7-04/)
+
+- sort.Interface
+
+  [Sort接口](https://www.k8stech.net/gopl/chapter7/ch7-06/)
+
+- http.Handler
+
+  [Http相关接口](https://www.k8stech.net/gopl/chapter7/ch7-07/)
+
 # goroutine
 
 ## goroutine
@@ -1309,7 +1680,7 @@ func main() {
 }
 ```
 
-> 主线程的阻塞会视为死锁
+> 主协程的阻塞会视为死锁
 
 > **为什么卡住不显示？记得问**
 >
@@ -1531,4 +1902,348 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 > Linux/Mac OS下，go run ...的末尾加&进行后台运行
 
+> 实际上，实现web服务需要实现http.Handler接口，有方法serverHTTP
+>
+> HandleFunc提供了一种转换机制，令普通方法转换成可以作为接口实现方法的格式
+>
+> ```go
+> package http
+> 
+> type HandlerFunc func(w ResponseWriter, r *Request)
+> 
+> func (f HandlerFunc) ServeHTTP(w ResponseWriter, r *Request) {
+> 	f(w, r)
+> }
+> ```
+>
+> [https://www.k8stech.net/gopl/chapter7/ch7-07/](https://www.k8stech.net/gopl/chapter7/ch7-07/)
+
 [取参数](https://blog.csdn.net/kenkao/article/details/47857757)
+
+不同的方法 → 注册到不同的ServerMux → 运行
+
+go http包提供了默认的DefaultServerMux，监听时传入nil即可
+
+## 练习题
+
+[https://www.k8stech.net/gopl/chapter8/ch8-02/](https://www.k8stech.net/gopl/chapter8/ch8-02/)
+
+### 并发的FTP服务器
+
+> 主要功能
+>
+> - cd命令来切换目录
+> - ls来列出目录内文件
+> - get和send来传输文件
+> - close来关闭连接
+
+结构：
+
+myFTP
+
+|_main
+
+​	|_server.go
+
+​	|_client.go
+
+|_attach
+
+​	|_serverFuncs.go
+
+​	|_errors.go
+
+|_go.mod
+
+#### main
+
+```go
+// server.go
+package main
+
+import (
+	"log"
+	"net"
+	"strings"
+	"os"
+	"fmt"
+	"myFTP/attach"
+)
+
+type orderFmt struct {
+	len int
+	description string
+	format string
+}
+
+var cmds = map[string]orderFmt{
+	"doc": orderFmt{1, "查看指令文档", "doc [None]"},
+	"pwd": orderFmt{1, "显示当前路径", "pwd [None]"},
+	"cd": orderFmt{2, "进入/退出某路径", "cd [Path]"},
+	"ls": orderFmt{1, "显示当前路径下内容", "ls [None]"},
+	"get": orderFmt{2, "获取某文件到本地", "get [FilePath]"},
+	"send": orderFmt{2, "向指定路径传输本地文件", "send [Path]"},
+	"close": orderFmt{1, "关闭连接", "close [None]"}}
+
+
+func main() {
+	listener, err := net.Listen("tcp", "localhost:8000")
+	if err != nil {
+		// Fatal：打印日志；退出程序；不执行defer
+		log.Fatal(err)
+	}
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Print(err) // e.g., connection aborted
+			continue
+		}
+		go parseConn(conn) // handle one connection at a time
+	}
+}
+
+func parseConn(c net.Conn) {
+	defer c.Close()
+	currPath, err := os.Getwd()
+	if err != nil {
+		c.Write([]byte("> 读取服务器文件目录异常"))
+		return
+	}
+	for {
+		buf := make([]byte, 64)
+		_, err := c.Read(buf)
+		// 读取错误，表示有可能是连接断开
+		if err != nil {
+			fmt.Println("疑似远程客户端", c.RemoteAddr(), "异常断开")
+			return
+		}
+		// 指令拆分
+		for i, _ := range buf {
+			if buf[i] == 0 {
+				buf = buf[:i]
+				break
+			}
+		}
+		ss := strings.Split(strings.Trim(string(buf), " "), " ")
+		if len(ss) == 0 {
+			c.Write([]byte("> 请输入指令"))
+			continue
+		}
+		// 取指令头
+		_, ok := cmds[string(ss[0])]
+		if !ok {
+			c.Write([]byte("> 无法解析该指令"))
+			continue
+		}
+		// 处理指令
+		ret, err := handler(ss, c, &currPath)
+		c.Write([]byte("> " + ret))
+		if attach.Errno(2) == err {
+			fmt.Println("远程客户端", c.RemoteAddr(), "断开")
+			break
+		}
+	}
+}
+
+func handler(ss []string, c net.Conn, path *string) (string, error) {
+	head := ss[0]
+	if cmds[head].len != len(ss) {
+		return "请检查指令格式: " + cmds[head].format, attach.Errno(1)
+	}
+	
+	switch head {
+		case "pwd": {
+			return *path, nil
+		}
+		case "ls": {
+			s, err := attach.LsFunc(*path)
+			if err != nil {
+				log.Fatal(err)
+				return "'ls': 指令运行异常", attach.Errno(3)
+			}
+			return s, nil
+		}
+		case "cd": {
+			s, err := attach.CdFunc(path, ss[1])
+			if err != nil {
+				log.Fatal(err)
+				return "'cd': 指令运行异常", attach.Errno(4)
+			}
+			return s, nil
+		}
+		case "doc": {
+			str := "\n支持的指令有:\n"
+			for k, _ := range cmds {
+				p := cmds[k]
+				str += k + "\t\t" + p.format + "\t\t" + p.description + "\n"
+			}
+			return str, nil
+		}
+		case "close": {
+			return "FIN", attach.Errno(2)
+		}
+		default: return "无法处理的异常", attach.Errno(5)
+	}
+}
+```
+
+```go
+// client.go
+package main
+
+import (
+	"log"
+	"net"
+	"fmt"
+	"bufio"
+	"os"
+)
+
+func main() {
+	conn, err := net.Dial("tcp", "localhost:8000")
+	if err != nil {
+		log.Fatal(err)
+	}
+	sendCommand(conn)
+}
+
+func sendCommand(c net.Conn) {
+	defer c.Close()
+	// 发送指令
+	var command string
+	for {
+		buf := make([]byte, 65536)
+		fmt.Print("\rmyFTP> ")
+		// scanf加换行符很重要！
+		// 否则会将上次你输入的回车放在缓冲，下次输入直接跳过
+		// 默认不接收空格和回车，所以换方式：① scanf + %c ② NewReader或NewScanner读Stdin
+		// fmt.Scanf("%s\n", &command)  
+		scanner := bufio.NewScanner(os.Stdin)
+		if scanner.Scan() {
+			command = scanner.Text()
+		}
+		if len(command) == 0 {
+			continue
+		}
+		_, err := c.Write([]byte(command))
+		if err != nil {
+			log.Fatal(err)
+		}
+		
+		// 结果回显
+		_, err = c.Read(buf)
+		fmt.Println(string(buf))
+		if string(buf)[:5] == "> FIN" {
+			fmt.Println("> 连接已断开")
+			break
+		}
+	}
+}
+```
+
+#### attach
+
+ ```go
+// errors.go
+package attach
+
+import "fmt"
+
+type Errno uintptr 
+
+var errors = [...]string{
+	1:   "指令格式异常",   
+	2:   "连接断开", 
+	3:   "ls指令运行异常",    
+	4:   "cd指令运行异常", 
+	5:   "无法处理的异常"}
+
+func (e Errno) Error() string {
+	if 0 <= int(e) && int(e) < len(errors) {
+		return errors[e]
+	}
+	return fmt.Sprintf("未知异常:  errno %d", e)
+}
+ ```
+
+```go
+// serverFuncs.go
+package attach
+
+import (
+	"strings"
+	"os"
+	"fmt"
+	"io/ioutil"
+)
+
+func LsFunc(path string) (string, error) {
+	ret := "\n"
+	rd, err := ioutil.ReadDir(path)
+	if err != nil {
+		return ret, err
+	}
+	lineCounter := 0
+	for _, fi := range rd {
+		lineCounter++
+		if lineCounter == 5 {
+			ret += "\n"
+			lineCounter = 0
+		}
+		if fi.IsDir(){
+			// %c是开始和结束符标记，后面跟的是接下来的颜色
+			ret += fmt.Sprintf("%c[1;32m%s%c[0m", 0x1B, fi.Name(), 0x1B) + "\t"
+		} else {
+			ret += fi.Name() + "\t"
+		}
+	}
+	return ret, nil
+}
+
+func CdFunc(path *string, dst string) (string, error) {
+	newPath := *path
+	dst = strings.Trim(dst, "\\")
+	ps := strings.Split(dst, "\\")
+	if len(ps) == 1{
+		if ps[0][0:2] == ".." {
+			if len(ps[0]) != 2 {
+				return "该路径不存在", nil
+			}
+			for i := len(newPath) - 1; i >= 0; i-- {
+				if newPath[i] == '\\' && i != len(newPath) - 1 {
+					*path = newPath[:i]
+					if len(*path) == 2 {
+						*path += "\\"
+					}
+					fmt.Println(newPath)
+					return *path, nil
+				}
+			}
+			fmt.Println(newPath)
+			return "已到达根路径", nil
+		}
+	}
+	for _, v := range ps {
+		if newPath[len(newPath) - 1] == '\\' {
+			newPath += v
+		} else {
+			newPath += "\\" + v
+		}
+		fmt.Println(newPath)
+		fi, err := os.Stat(newPath)
+		if err != nil {
+			return "该路径不存在", nil
+		}
+		if fi.IsDir() {
+			*path = newPath
+			continue
+		}		
+		return "这不是一个目录", nil
+	}
+	return *path, nil
+}
+```
+
+> todo: send & get
+
