@@ -1700,6 +1700,11 @@ func main() {
 > }
 > ```
 
+```go
+make(chan<- int) // 定义只发送的channel
+make(<-chan int) // 定义只接收的channel
+```
+
 ### range 和 close
 
 发送者可通过 `close` 关闭一个信道来表示没有需要发送的值了。**接收者**可以通过为接收表达式分配第二个参数来测试信道是否被关闭：若没有值可以接收且信道已被关闭，那么在执行完
@@ -1765,6 +1770,35 @@ default:
 }
 ```
 
+下面这个例子更微妙。ch这个channel的buffer大小是1，所以会交替的为空或为满，所以只有一个case可以进行下去，无论i是奇数或者偶数，它都会打印0 2 4 6 8
+
+```go
+ch := make(chan int, 1)
+for i := 0; i < 10; i++ {
+	select {
+	case x := <-ch:
+		fmt.Println(x) // "0" "2" "4" "6" "8"
+	case ch <- i:
+	}
+}
+```
+
+> 思考为什么？
+
+下面的select语句会在abort channel中有值时，从其中接收值；无值时什么都不做。这是一个非阻塞的接收操作；反复地做这样的操作叫做“轮询channel”
+
+```go
+select {
+case <-abort:
+	fmt.Printf("Launch aborted!\n")
+	return
+default:
+	// do nothing
+}
+```
+
+信道是并发安全的，go有口头禅：“不要使用共享数据来通信；使用通信来共享数据”
+
 ## sync.Mutex
 
 我们已经看到信道非常适合在各个 goroutine 间进行通信
@@ -1819,6 +1853,20 @@ func main() {
 	fmt.Println(c.Value("somekey"))
 }
 ```
+
+go里没有重入锁
+
+一个通用的解决方案是将一个函数分离为多个函数，比如我们把函数分离成两个：一个不导出的，这个函数不加锁，假设锁总是会被保持并去做实际的操作；另一个是导出的函数，这个函数会调用刚刚的函数，但在调用前会先去获取锁
+
+[读写锁](https://www.k8stech.net/gopl/chapter9/ch9-03/)
+
+只要在go build，go run或者go test命令后面加上-race的flag，就会使编译器创建一个你的应用的“修改”版或者一个附带了能够记录所有运行期对共享变量访问工具的test，并且会记录下每一个读或者写共享变量的goroutine的身份信息。另外，修改版的程序会记录下所有的同步事件，比如go语句，channel操作，以及对`(*sync.Mutex).Lock`，`(*sync.WaitGroup).Wait`等等的调用。
+
+竞争检查器会检查这些事件，会寻找在哪一个goroutine中出现了这样的case，例如其读或者写了一个共享变量，这个共享变量是被另一个goroutine在没有进行同步操作便直接写入的。这种情况也就表明了是对一个共享变量的并发访问，即数据竞争。这个工具会打印一份报告，内容包含变量身份，读取和写入的goroutine中活跃的函数的调用栈
+
+竞争检查器会报告所有的已经发生的数据竞争。然而，它只能检测到运行时的竞争条件；并不能证明之后不会发生数据竞争。所以为了使结果尽量正确，请保证你的测试并发地覆盖到了你的包
+
+由于需要额外的记录，因此构建时加了竞争检测的程序跑起来会慢一些，且需要更大的内存，即使是这样，这些代价对于很多生产环境的工作来说还是可以接受的
 
 ## sync.WaitGroup
 
@@ -1926,9 +1974,9 @@ go http包提供了默认的DefaultServerMux，监听时传入nil即可
 
 ## 练习题
 
-[https://www.k8stech.net/gopl/chapter8/ch8-02/](https://www.k8stech.net/gopl/chapter8/ch8-02/)
-
 ### 并发的FTP服务器
+
+> [https://www.k8stech.net/gopl/chapter8/ch8-02/](https://www.k8stech.net/gopl/chapter8/ch8-02/)
 
 > 主要功能
 >
@@ -2247,3 +2295,153 @@ func CdFunc(path *string, dst string) (string, error) {
 
 > todo: send & get
 
+### 聊天服务器（群聊）
+
+> https://www.k8stech.net/gopl/chapter8/ch8-10/
+
+chat
+
+|_main
+
+​	|_main.go
+
+​	|_client.go
+
+|_utils
+
+​	|_broadcaster.go
+
+​	|_handler.go
+
+```go
+// main.go
+package main
+
+import (
+	"net"
+	"log"
+	"chat/utils"
+)
+
+func main() {
+	listener, err := net.Listen("tcp", "localhost:8000")
+	if err != nil {
+		log.Fatal(err)
+	}
+	go utils.Broadcaster()
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Print(err)
+			continue
+		}
+		go utils.HandleConn(conn)
+	}
+}
+```
+
+```go
+package main
+
+import (
+	"log"
+	"net"
+	"fmt"
+	"bufio"
+	"os"
+)
+
+func main() {
+	conn, err := net.Dial("tcp", "localhost:8000")
+	if err != nil {
+		log.Fatal(err)
+	}
+	handler(conn)
+}
+
+func handler(conn net.Conn) {
+	defer conn.Close()
+	go clientReader(conn)
+	input := bufio.NewScanner(os.Stdin)
+	for input.Scan() {
+		_, err := fmt.Fprintln(conn, input.Text())
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+func clientReader(conn net.Conn) {
+	input := bufio.NewScanner(conn)
+	for input.Scan() {
+		fmt.Println(input.Text())
+	}
+}
+```
+
+```go
+// broadcaster.go
+package utils
+
+type client chan<- string
+
+var (
+	entering = make(chan client)
+	leaving = make(chan client)
+	messages = make(chan string)
+)
+
+func Broadcaster() {
+	clients := make(map[client]bool)
+	for {
+		select {
+		case msg := <-messages:
+			for cli := range clients {
+				cli <- msg
+			}
+		case cli := <-entering: 
+			clients[cli] = true
+		case cli := <-leaving:
+			delete(clients, cli)
+			close(cli)
+		}
+		
+	}
+}
+```
+
+```go
+// handler.go
+package utils
+
+import (
+	"bufio"
+	"net"
+	"fmt"
+)
+
+func HandleConn(conn net.Conn) {
+	ch := make(chan string)
+	go clientWriter(conn, ch)
+
+	who := "[User-" + conn.RemoteAddr().String() + "]"
+	ch <- "You are" + who
+	messages <- who + " is online"
+	entering <- ch
+	
+	input := bufio.NewScanner(conn)
+	for input.Scan() {
+		messages <- who + ": " + input.Text()
+	}
+	
+	leaving <- ch
+	messages <- who + " is offline"
+	conn.Close()
+}
+
+func clientWriter(conn net.Conn, ch <-chan string) {
+	for msg := range ch {
+		fmt.Fprintln(conn, msg) // NOTE: ignoring network errors
+	}
+}
+```
