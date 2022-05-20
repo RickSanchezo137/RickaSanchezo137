@@ -1,5 +1,508 @@
 # [返回](/)
 
+> 参考资料：[Go圣经](https://www.k8stech.net/gopl/chapter0/)
+
+# 包和构建
+
+- 所有导入的包必须在每个文件的开头显式声明，这样的话编译器就没有必要读取和分析整个源文件来判断包的依赖关系
+- 禁止包的环状依赖，因为没有循环依赖，包的依赖关系形成一个有向无环图，每个包可以被独立编译，而且很可能是被并发编译
+- 编译后包的目标文件不仅仅记录包本身的导出信息，目标文件同时还记录了包的依赖关系。因此，在编译一个包的时候，编译器只需要读取每个直接导入包的目标文件，而不需要遍历所有依赖的的文件（很多都是重复的间接依赖） 
+
+**重命名避免冲突**
+
+```go
+import (
+	"crypto/rand"
+	mrand "math/rand" // 包重命名
+)
+```
+
+**匿名导入**
+
+如果只是导入一个包而并不使用导入的包将会导致一个编译错误。但是有时候我们只是想利用导入包而产生的其他作用：它会计算包级变量的初始化表达式和执行导入包的init初始化函数。这时候我们需要抑制“unused import”编译错误，我们可以用下划线`_`来重命名导入的包。像往常一样，下划线`_`为空白标识符，并不能被访问
+
+```go
+import _ "image/png" // register PNG decoder
+```
+
+**命名规范**
+
+-  一般要用短小的包名 
+- 尽可能让命名有描述性且无歧义
+- 一般采用单数的形式
+- 避免包名有其它的含义
+
+## 构建
+
+goroot/gopath/gomodule
+
+### gopath
+
+对于大多数的Go语言用户，只需要配置一个名叫GOPATH的环境变量，用来指定当前工作目录即可。当需要切换到不同工作区的时候，只要更新GOPATH就可以了
+
+> 建议随项目设置gopath，尽量不要使用全局的
+
+```bash
+$ export GOPATH=$HOME/gobook
+$ go get gopl.io/...
+```
+
+举例，工作区的目录结构可能是这样的：
+
+```bash
+GOPATH/
+	src/
+		gopl.io/
+			.git/
+			ch1/
+				helloworld/
+					main.go
+				dup/
+					main.go
+				...
+		golang.org/x/net/
+			.git/
+			html/
+				parse.go
+				node.go
+				...
+	bin/
+		helloworld
+		dup
+	pkg/
+		darwin_amd64/
+		...
+```
+
+GOPATH对应的工作区目录有三个子目录
+
+- src子目录用于存储源代码。每个包被保存在与$GOPATH/src的相对路径为包导入路径的子目录中，例如gopl.io/ch1/helloworld相对应的路径目录。我们看到，一个GOPATH工作区的src目录中可能有多个独立的版本控制系统，例如gopl.io和golang.org分别对应不同的Git仓库
+- pkg子目录用于保存编译后的包的目标文件
+- bin子目录用于保存编译后的可执行程序，例如helloworld可执行程序
+
+### goroot
+
+GOROOT用来指定Go的安装目录，还有它自带的标准库包的位置。GOROOT的目录结构和GOPATH类似，因此存放fmt包的源代码对应目录应该为$GOROOT/src/fmt。用户一般不需要设置GOROOT，默认情况下Go语言安装工具会将其设置为安装的目录路径
+
+其中`go env`命令用于查看Go语言工具涉及的所有环境变量的值，包括未设置环境变量的默认值。GOOS环境变量用于指定目标操作系统（例如android、linux、darwin或windows），GOARCH环境变量用于指定处理器的类型，例如amd64、386或arm等。虽然GOPATH环境变量是唯一必须要设置的，但是其它环境变量也会偶尔用到
+
+```bash
+$ go env
+GOPATH="/home/gopher/gobook"
+GOROOT="/usr/local/go"
+GOARCH="amd64"
+GOOS="darwin"
+...
+```
+
+`go env -w`可以修改
+
+### gomodule
+
+**为什么弃用 GOPATH 模式**
+
+在 GOPATH 的 $GOPATH/src 下进行 .go 文件或源代码的存储，我们可以称其为 GOPATH 的模式，这个模式，看起来好像没有什么问题，那么为什么我们要弃用呢，参见如下原因：
+
+- 在执行go get的时候，你无法传达任何的版本信息的期望，也就是说你也无法知道自己当前更新的是哪一个版本，也无法通过指定来拉取自己所期望的具体版本
+- 在运行 Go 应用程序的时候，你无法保证其它人与你所期望依赖的第三方库是相同的版本，也就是说在项目依赖库的管理上，你无法保证所有人的依赖版本都一致
+- 没办法处理 v1、v2、v3 等等不同版本的引用问题，因为 GOPATH 模式下的导入路径都是一样的，都是`github.com/foo/bar`
+
+在 Go modules 中，我们能够使用如下命令进行操作：
+
+> go mod init 生成 go.mod 文件
+> go mod download 下载 go.mod 文件中指明的所有依赖
+> go mod tidy 整理现有的依赖
+> go mod graph 查看现有的依赖结构
+> go mod edit 编辑 go.mod 文件
+> go mod vendor 导出项目所有的依赖到vendor目录
+> go mod verify 校验一个模块是否被篡改过
+> go mod why 查看为什么需要依赖某模块
+
+所提供的环境变量
+在 Go modules 中有如下常用环境变量，我们可以通过 go env 命令来进行查看，如下：
+
+```go
+$ go env
+GO111MODULE="auto"
+GOPROXY="https://proxy.golang.org,direct"
+GONOPROXY=""
+GOSUMDB="sum.golang.org"
+GONOSUMDB=""
+GOPRIVATE=""
+...
+```
+
+#### GO111MODULE
+
+Go语言提供了 GO111MODULE 这个环境变量来作为 Go modules 的开关，其允许设置以下参数：
+
+auto：只要项目包含了 go.mod 文件的话且在gopath外部，启用 Go modules，目前在 Go1.11 至 Go1.14 中仍然是默认值
+
+- on：启用 Go modules，推荐设置，将会是未来版本中的默认值
+- off：禁用 Go modules，不推荐设置
+
+#### GOPROXY
+
+这个环境变量主要是用于设置 Go 模块代理（Go module proxy），其作用是用于使 Go 在后续拉取模块版本时能够脱离传统的 VCS 方式，直接通过镜像站点来快速拉取
+
+GOPROXY 的默认值是：`https://proxy.golang.org,direct`，这有一个很严重的问题，就是 proxy.golang.org 在国内是无法访问的，因此这会直接卡住你的第一步，所以你必须在开启 Go modules 的时，同时设置国内的 Go 模块代理，执行如下命令
+
+> $ go env -w GOPROXY=https://goproxy.cn,direct
+> GOPROXY 的值是一个以英文逗号 “,” 分割的 Go 模块代理列表，允许设置多个模块代理，假设你不想使用，也可以将其设置为 “off” ，这将会禁止 Go 在后续操作中使用任何 Go 模块代理
+
+**direct是什么**
+
+而在刚刚设置的值中，我们可以发现值列表中有 “direct” 标识，它又有什么作用呢？
+
+实际上 “direct” 是一个特殊指示符，用于指示 Go 回源到模块版本的源地址去抓取（比如 GitHub 等），场景如下：当值列表中上一个 Go 模块代理返回 404 或 410 错误时，Go 自动尝试列表中的下一个，遇见 “direct” 时回源，也就是回到源地址去抓取，而遇见 EOF 时终止并抛出类似 “invalid version: unknown revision…” 的错误
+
+#### GOSUMDB
+
+它的值是一个 Go checksum database，用于在拉取模块版本时（无论是从源站拉取还是通过 Go module proxy 拉取）保证拉取到的模块版本数据未经过篡改，若发现不一致，也就是可能存在篡改，将会立即中止
+
+GOSUMDB 的默认值为：sum.golang.org，在国内也是无法访问的，但是 GOSUMDB 可以被 Go 模块代理所代理（详见：Proxying a Checksum Database）
+
+因此我们可以通过设置 GOPROXY 来解决，而先前我们所设置的模块代理 goproxy.cn 就能支持代理 sum.golang.org，所以这一个问题在设置 GOPROXY 后，你可以不需要过度关心
+
+也可以将其设置为“off”，也就是禁止 Go 在后续操作中校验模块版本
+
+#### GONOPROXY/GONOSUMDB/GOPRIVATE
+
+这三个环境变量都是用在当前项目依赖了私有模块，例如像是你公司的私有 git 仓库，又或是 github 中的私有库，都是属于私有模块，都是要进行设置的，否则会拉取失败
+
+更细致来讲，就是依赖了由 GOPROXY 指定的 Go 模块代理或由 GOSUMDB 指定 Go checksum database 都无法访问到的模块时的场景
+
+而一般建议直接设置 GOPRIVATE，它的值将作为 GONOPROXY 和 GONOSUMDB 的默认值，所以建议的最佳姿势是直接使用 GOPRIVATE
+
+并且它们的值都是一个以英文逗号 “,” 分割的模块路径前缀，也就是可以设置多个，例如：
+
+```go
+$ go env -w GOPRIVATE="git.example.com,github.com/eddycjy/mquote"
+```
+
+设置后，前缀为 git.xxx.com 和 github.com/eddycjy/mquote 的模块都会被认为是私有模块
+
+如果不想每次都重新设置，我们也可以利用通配符，例如：
+
+```go
+$ go env -w GOPRIVATE="*.example.com"
+```
+
+这样子设置的话，所有模块路径为 example.com 的子域名（例如：git.example.com）都将不经过 Go module proxy 和 Go checksum database，需要注意的是不包括 example.com 本身
+
+#### 使用 Go Modules
+
+目前 Go modules 并不是默认开启，因此Go语言提供了 GO111MODULE 这个环境变量来作为 Go modules 的开关，其允许设置以下参数：
+
+- auto：只要项目包含了 go.mod 文件的话启用 Go modules，目前在Go1.11至 Go1.14 中仍然是默认值。
+- on：启用 Go modules，推荐设置，将会是未来版本中的默认值。
+- off：禁用 Go modules，不推荐设置。
+
+**初始化项目**
+
+在完成 Go modules 的开启后，我们需要创建一个示例项目来进行演示，执行如下命令：
+
+```go
+$ mkdir -p $HOME/eddycjy/module-repo 
+$ cd $HOME/eddycjy/module-repo
+```
+
+然后进行 Go modules 的初始化，如下：
+
+```go
+$ go mod init github.com/eddycjy/module-repo
+go: creating new go.mod: module github.com/eddycjy/module-repo
+12
+```
+
+在执行 `go mod init`命令时，我们指定了模块导入路径为 `github.com/eddycjy/module-repo`。接下来我们在该项目根目录下创建 main.go 文件，如下：
+
+```go
+package main
+ 
+import (
+    "fmt"
+    "github.com/eddycjy/mquote"
+)
+ 
+ 
+func main() {
+	fmt.Println(mquote.GetHello())
+}
+```
+
+然后在项目根目录执行 `go get github.com/eddycjy/mquote` 命令，如下：
+
+```go
+$ go get github.com/eddycjy/mquote 
+go: finding github.com/eddycjy/mquote latest
+go: downloading github.com/eddycjy/mquote v0.0.0-20200220041913-e066a990ce6f
+go: extracting github.com/eddycjy/mquote v0.0.0-20200220041913-e066a990ce6f
+```
+
+**查看 go.mod 文件**
+
+在初始化项目时，会生成一个 go.mod 文件，是启用了 Go modules 项目所必须的最重要的标识，同时也是 GO111MODULE 值为 auto 时的识别标识，它描述了当前项目（也就是当前模块）的元信息，每一行都以一个动词开头
+
+在我们刚刚进行了初始化和简单拉取后，我们再次查看 go.mod 文件，基本内容如下：
+
+```go
+module github.com/eddycjy/module-repo
+ 
+go 1.13
+ 
+require (
+	github.com/eddycjy/mquote v0.0.0-20200220041913-e066a990ce6f
+)
+```
+
+为了更进一步的讲解，我们模拟引用如下：
+
+```go
+module github.com/eddycjy/module-repo
+
+go 1.13
+ 
+require (
+    example.com/apple v0.1.2
+    example.com/banana v1.2.3
+    example.com/banana/v2 v2.3.4
+    example.com/pear // indirect
+    example.com/strawberry // incompatible
+)
+ 
+ 
+exclude example.com/banana v1.2.4
+replace example.com/apple v0.1.2 => example.com/fried v0.1.0 
+replace example.com/banana => example.com/fish
+```
+
+- module：用于定义当前项目的模块路径
+- go：用于标识当前模块的 Go 语言版本，值为初始化模块时的版本，目前来看还只是个标识作用
+- require：用于设置一个特定的模块版本
+- exclude：用于从使用中排除一个特定的模块版本
+- replace：用于将一个模块版本替换为另外一个模块版本
+
+另外你会发现 `example.com/pear` 的后面会有一个 indirect 标识，
+indirect 标识表示该模块为间接依赖，也就是在当前应用程序中的 import 语句中，并没有发现这个模块的明确引用，有可能是你先手动 go get 拉取下来的，也有可能是你所依赖的模块所依赖的，情况有好几种
+
+**查看 go.sum 文件**
+
+在第一次拉取模块依赖后，会发现多出了一个 go.sum 文件，其详细罗列了当前项目直接或间接依赖的所有模块版本，并写明了那些模块版本的 SHA-256 哈希值以备 Go 在今后的操作中保证项目所依赖的那些模块版本不会被篡改
+
+**查看全局缓存**
+
+我们刚刚成功的将 github.com/eddycjy/mquote 模块拉取了下来，其拉取的结果缓存在 GOPATH/pkg/mod和 ​GOPATH/pkg/sumdb 目录下，而在mod目录下会以 github.com/foo/bar 的格式进行存放，如下：
+
+```
+mod
+├── cache
+├── github.com
+├── golang.org
+├── google.golang.org
+├── gopkg.in
+...
+```
+
+需要注意的是同一个模块版本的数据只缓存一份，所有其它模块共享使用。如果你希望清理所有已缓存的模块版本数据，可以执行 `go clean -modcache`
+
+#### **Go Modules 下的 go get 行为**
+
+在拉取项目依赖时，你会发现拉取的过程总共分为了三大步，分别是 finding（发现）、downloading（下载）以及 extracting（提取）
+
+- go get 拉取依赖，会进行指定性拉取（更新），并不会更新所依赖的其它模块
+- go get -u 更新现有的依赖，会强制更新它所依赖的其它全部模块，不包括自身
+- go get -u -t ./… 更新所有直接依赖和间接依赖的模块版本，包括单元测试中用到的
+  那么我想选择具体版本应当如何执行呢，如下：
+
+| 命令                            | 作用                                                  |
+| ------------------------------- | ----------------------------------------------------- |
+| go get golang.org/x/text@latest | 拉取最新的版本，若存在tag，则优先使用                 |
+| go get golang.org/x/text@master | 拉取 master 分支的最新 commit                         |
+| go get golang.org/x/text@v0.3.2 | 拉取 tag 为 v0.3.2 的 commit                          |
+| go get golang.org/x/text@342b2e | 拉取 hash 为 342b231 的 commit，最终会被转换为 v0.3.2 |
+
+**go get 的版本选择**
+
+我们回顾一下我们拉取的 go get github.com/eddycjy/mquote，其结果是 v0.0.0-20200220041913-e066a990ce6f，对照着上面所提到的 go get 行为来看，你可能还会有一些疑惑，那就是在 go get 没有指定任何版本的情况下，它的版本选择规则是怎么样的，也就是为什么 go get 拉取的是 v0.0.0，它什么时候会拉取正常带版本号的 tags 呢。实际上这需要区分两种情况，如下：
+
+- 所拉取的模块有发布 tags：
+  - 如果只有单个模块，那么就取主版本号最大的那个tag
+  - 如果有多个模块，则推算相应的模块路径，取主版本号最大的那个tag（子模块的tag的模块路径会有前缀要求）
+- 所拉取的模块没有发布过 tags：
+  - 默认取主分支最新一次 commit 的 commithash。
+
+#### Go Modules 的导入路径说明
+
+### 不同版本的导入路径
+
+在前面的模块拉取和引用中，你会发现我们的模块导入路径就是 github.com/eddycjy/mquote 和 github.com/eddycjy/mquote/module/tour，似乎并没有什么特殊的。
+
+其实不然，实际上 Go modules 在主版本号为 v0 和 v1 的情况下省略了版本号，而在主版本号为v2及以上则需要明确指定出主版本号，否则会出现冲突，其tag与模块导入路径的大致对应关系如下：
+
+tag 模块导入路径
+
+```
+v0.0.0	github.com/eddycjy/mquote
+v1.0.0	github.com/eddycjy/mquote
+v2.0.0	github.com/eddycjy/mquote/v2
+v3.0.0	github.com/eddycjy/mquote/v3
+```
+
+简单来讲，就是主版本号为 v0 和 v1 时，不需要在模块导入路径包含主版本的信息，而在 v1 版本以后，也就是 v2 起，必须要在模块的导入路径末尾加上主版本号，引用时就需要调整为如下格式：
+
+```go
+import (
+    "github.com/eddycjy/mquote/v2/example"
+)
+123
+```
+
+另外忽略主版本号 v0 和 v1 是强制性的（不是可选项），因此每个软件包只有一个明确且规范的导入路径
+
+**为什么忽略 v0 和 v1 的主版本号**
+
+导入路径中忽略 v1 版本的原因是：考虑到许多开发人员创建一旦到达 v1 版本便永不改变的软件包，这是官方所鼓励的，不认为所有这些开发人员在无意发布 v2 版时都应被迫拥有明确的 v1 版本尾缀，这将导致 v1 版本变成“噪音”且无意义
+
+导入路径中忽略了 v0 版本的原因是：根据语义化版本规范，v0的这些版本完全没有兼容性保证。需要一个显式的 v0 版本的标识对确保兼容性没有多大帮助
+
+[更多](https://blog.csdn.net/u011069013/article/details/110114319)
+
+## 包管理
+
+### 下载包
+
+使用命令`go get`可以下载一个单一的包或者用`...`下载整个子目录里面的每个包。Go语言工具箱的go命令同时计算并下载所依赖的每个包，这也是前一个例子中golang.org/x/net/html自动出现在本地工作区目录的原因。
+
+一旦`go get`命令下载了包，然后就是安装包或包对应的可执行的程序。我们将在下一节再关注它的细节，现在只是展示整个下载过程是如何的简单。第一个命令是获取golint工具，它用于检测Go源代码的编程风格是否有问题。第二个命令是用golint命令对2.6.2节的gopl.io/ch2/popcount包代码进行编码风格检查。它友好地报告了忘记了包的文档：
+
+```bash
+$ go get github.com/golang/lint/golint
+$ $GOPATH/bin/golint gopl.io/ch2/popcount
+src/gopl.io/ch2/popcount/main.go:1:1:
+  package comment should be of the form "Package popcount ..."
+```
+
+`go get`命令支持当前流行的托管网站GitHub、Bitbucket和Launchpad，可以直接向它们的版本控制系统请求代码。对于其它的网站，你可能需要指定版本控制系统的具体路径和协议，例如 Git或Mercurial。运行`go help importpath`获取相关的信息
+
+`go get`命令获取的代码是真实的本地存储仓库，而不仅仅只是复制源文件，因此你依然可以使用版本管理工具比较本地代码的变更或者切换到其它的版本。例如golang.org/x/net包目录对应一个Git仓库：
+
+```bash
+$ cd $GOPATH/src/golang.org/x/net
+$ git remote -v
+origin  https://go.googlesource.com/net (fetch)
+origin  https://go.googlesource.com/net (push)
+```
+
+需要注意的是导入路径含有的网站域名和本地Git仓库对应远程服务地址并不相同，真实的Git地址是go.googlesource.com。这其实是Go语言工具的一个特性，可以让包用一个自定义的导入路径，但是真实的代码却是由更通用的服务提供，例如googlesource.com或github.com。因为页面 https://golang.org/x/net/html 包含了如下的元数据，它告诉Go语言的工具当前包真实的Git仓库托管地址：
+
+```bash
+$ go build gopl.io/ch1/fetch
+$ ./fetch https://golang.org/x/net/html | grep go-import
+<meta name="go-import"
+      content="golang.org/x/net git https://go.googlesource.com/net">
+```
+
+如果指定`-u`命令行标志参数，`go get`命令将确保所有的包和依赖的包的版本都是最新的，然后重新编译和安装它们。如果不包含该标志参数的话，而且如果包已经在本地存在，那么代码将不会被自动更新
+
+`go get -u`命令只是简单地保证每个包是最新版本，如果是第一次下载包则是比较方便的；但是对于发布程序则可能是不合适的，因为本地程序可能需要对依赖的包做精确的版本依赖管理。通常的解决方案是使用vendor的目录用于存储依赖包的固定版本的源代码，对本地依赖的包的版本更新也是谨慎和持续可控的。在Go1.5之前，一般需要修改包的导入路径，所以复制后golang.org/x/net/html导入路径可能会变为gopl.io/vendor/golang.org/x/net/html。最新的Go语言命令已经支持vendor特性，但限于篇幅这里并不讨论vendor的具体细节。不过可以通过`go help gopath`命令查看Vendor的帮助文档
+
+### 构建包
+
+`go build`命令编译命令行参数指定的每个包
+
+也可以偷懒，直接`go run *.go`
+
+`go install`命令和`go build`命令很相似，但是它会保存每个包的编译成果，而不是将它们都丢弃。被编译的包会被保存到GOPATH/pkg目录下，目录路径和 src目录路径对应，可执行程序被保存到GOPATH/bin目录
+
+### 内部包
+
+在Go语言程序中，包是最重要的封装机制。没有导出的标识符只在同一个包内部可以访问，而导出的标识符则是面向全宇宙都是可见的
+
+有时候，一个中间的状态可能也是有用的，标识符对于一小部分信任的包是可见的，但并不是对所有调用者都可见。例如，当我们计划将一个大的包拆分为很多小的更容易维护的子包，但是我们并不想将内部的子包结构也完全暴露出去。同时，我们可能还希望在内部子包之间共享一些通用的处理包，或者我们只是想实验一个新包的还并不稳定的接口，暂时只暴露给一些受限制的用户使用
+
+为了满足这些需求，Go语言的构建工具对包含internal名字的路径段的包导入路径做了特殊处理。这种包叫internal包，一个internal包只能被和internal目录有同一个父目录的包所导入。例如，net/http/internal/chunked内部包只能被net/http/httputil或net/http包导入，但是不能被net/url包导入。不过net/url包却可以导入net/http/httputil包
+
+```go
+net/http
+net/http/internal/chunked
+net/http/httputil
+net/url
+```
+
+### 查询包
+
+`go list`命令可以查询可用包的信息。其最简单的形式，可以测试包是否在工作区并打印它的导入路径：
+
+```bash
+$ go list github.com/go-sql-driver/mysql
+github.com/go-sql-driver/mysql
+```
+
+`go list`命令的参数还可以用`"..."`表示匹配任意的包的导入路径。我们可以用它来列出工作区中的所有包：
+
+```bash
+$ go list ...
+archive/tar
+archive/zip
+bufio
+bytes
+cmd/addr2line
+cmd/api
+...many more...
+```
+
+或者是特定子目录下的所有包：
+
+```bash
+$ go list gopl.io/ch3/...
+gopl.io/ch3/basename1
+gopl.io/ch3/basename2
+gopl.io/ch3/comma
+gopl.io/ch3/mandelbrot
+gopl.io/ch3/netflag
+gopl.io/ch3/printints
+gopl.io/ch3/surface
+```
+
+或者是和某个主题相关的所有包:
+
+```bash
+$ go list ...xml...
+encoding/xml
+gopl.io/ch7/xmlselect
+```
+
+`go list`命令还可以获取每个包完整的元信息，而不仅仅只是导入路径，这些元信息可以以不同格式提供给用户。其中`-json`命令行参数表示用JSON格式打印每个包的元信息。
+
+```bash
+$ go list -json hash
+{
+	"Dir": "/home/gopher/go/src/hash",
+	"ImportPath": "hash",
+	"Name": "hash",
+	"Doc": "Package hash provides interfaces for hash functions.",
+	"Target": "/home/gopher/go/pkg/darwin_amd64/hash.a",
+	"Goroot": true,
+	"Standard": true,
+	"Root": "/home/gopher/go",
+	"GoFiles": [
+			"hash.go"
+	],
+	"Imports": [
+		"io"
+	],
+	"Deps": [
+		"errors",
+		"io",
+		"runtime",
+		"sync",
+		"sync/atomic",
+		"unsafe"
+	]
+}
+```
+
 # go语法
 
 ## 基本语法
@@ -1635,6 +2138,34 @@ f(x, y, z)
 
 Go 程在相同的地址空间中运行，因此在访问共享的内存时必须进行同步。sync 包提供了这种能力，不过在 Go 中并不经常用到，因为还有其它的办法
 
+### 多对多线程模型
+
+#### 动态栈
+
+每一个OS线程都有一个固定大小的内存块（一般会是2MB）来做栈，这个栈会用来存储当前正在被调用或挂起（指在调用其它函数时）的函数的内部变量。这个固定大小的栈同时很大又很小。因为2MB的栈对于一个小小的goroutine来说是很大的内存浪费，比如对于我们用到的，一个只是用来WaitGroup之后关闭channel的goroutine来说。而对于go程序来说，同时创建成百上千个goroutine是非常普遍的，如果每一个goroutine都需要这么大的栈的话，那这么多的goroutine就不太可能了。除去大小的问题之外，固定大小的栈对于更复杂或者更深层次的递归函数调用来说显然是不够的。修改固定的大小可以提升空间的利用率，允许创建更多的线程，并且可以允许更深的递归调用，不过这两者是没法同时兼备的
+
+相反，一个goroutine会以一个很小的栈开始其生命周期，一般只需要2KB。一个goroutine的栈，和操作系统线程一样，会保存其活跃或挂起的函数调用的本地变量，但是和OS线程不太一样的是，一个goroutine的栈大小并不是固定的；栈的大小会根据需要**动态地伸缩**。而goroutine的栈的最大值有1GB，比传统的固定大小的线程栈要大得多，尽管一般情况下，大多goroutine都不需要这么大的栈
+
+#### goroutine调度
+
+OS线程会被操作系统内核调度。每几毫秒，一个硬件计时器会中断处理器，这会调用一个叫作scheduler的内核函数。这个函数会挂起当前执行的线程并将它的寄存器内容保存到内存中，检查线程列表并决定下一次哪个线程可以被运行，并从内存中恢复该线程的寄存器信息，然后恢复执行该线程的现场并开始执行线程
+
+因为操作系统线程是被内核所调度，所以从一个线程向另一个“移动”需要完整的上下文切换，也就是说，保存一个用户线程的状态到内存，恢复另一个线程的到寄存器，然后更新调度器的数据结构。这几步操作很慢，因为其局部性很差需要几次内存访问，并且会增加运行的cpu周期。
+
+Go的运行时**包含了其自己的调度器**，这个调度器使用了一些技术手段，比如m:n调度，因为其会在n个操作系统线程上多工（调度）m个goroutine。Go调度器的工作和内核的调度是相似的，但是这个调度器只关注单独的Go程序中的goroutine（调度器按程序独立）
+
+和操作系统的线程调度不同的是，Go调度器并不是用一个硬件定时器，而是被Go语言“建筑”本身进行调度的。例如当一个goroutine调用了time.Sleep，或者被channel调用或者mutex操作阻塞时，调度器会使其进入休眠并开始执行另一个goroutine，直到时机到了再去唤醒第一个goroutine。因为这种调度方式不需要进入内核的上下文，所以重新调度一个goroutine比调度一个线程代价要低得多
+
+> Go的调度器使用了一个叫做GOMAXPROCS的变量来决定会有多少个操作系统的线程同时执行Go的代码。其默认的值是运行机器上的CPU的核心数，所以在一个有8个核心的机器上时，调度器一次会在8个OS线程上去调度GO代码（GOMAXPROCS是前面说的m:n调度中的n）。在休眠中的或者在通信中被阻塞的goroutine是不需要一个对应的线程来做调度的。在I/O中或系统调用中或调用非Go语言函数时，是需要一个对应的操作系统线程的，但是GOMAXPROCS并不需要将这几种情况计算在内
+>
+> 可以用GOMAXPROCS的环境变量来显式地控制这个参数，或者也可以在运行时用runtime.GOMAXPROCS函数来修改它
+
+#### goroutine没有ID号
+
+在大多数支持多线程的操作系统和程序语言中，当前的线程都有一个独特的身份（id），并且这个身份信息可以以一个普通值的形式被很容易地获取到，典型的可以是一个integer或者指针值。这种情况下我们做一个抽象化的thread-local storage（线程本地存储，多线程编程中不希望其它线程访问的内容）就很容易，只需要以线程的id作为key的一个map就可以解决问题，每一个线程以其id就能从中获取到值，且和其它线程互不冲突
+
+goroutine没有可以被程序员获取到的身份（id）的概念。这一点是设计上故意而为之，由于thread-local storage总是会被滥用
+
 ## 信道
 
 信道是带有类型的管道，你可以通过它用信道操作符 `<-` 来发送或者接收值
@@ -1867,6 +2398,8 @@ go里没有重入锁
 竞争检查器会报告所有的已经发生的数据竞争。然而，它只能检测到运行时的竞争条件；并不能证明之后不会发生数据竞争。所以为了使结果尽量正确，请保证你的测试并发地覆盖到了你的包
 
 由于需要额外的记录，因此构建时加了竞争检测的程序跑起来会慢一些，且需要更大的内存，即使是这样，这些代价对于很多生产环境的工作来说还是可以接受的
+
+[一个缓存的设计](https://www.k8stech.net/gopl/chapter9/ch9-07/)
 
 ## sync.WaitGroup
 
@@ -2445,3 +2978,212 @@ func clientWriter(conn net.Conn, ch <-chan string) {
 	}
 }
 ```
+
+# go测试
+
+go test命令是一个按照一定的约定和组织来测试代码的程序。在包目录内，所有以`_test.go`为后缀名的源文件在执行go build时不会被构建成包的一部分，它们是go test测试的一部分
+
+在`*_test.go`文件中，有三种类型的函数：测试函数、基准测试（benchmark）函数、示例函数
+
+- 测试函数是以Test为函数名前缀的函数，用于测试程序的一些逻辑行为是否正确；go test命令会调用这些测试函数并报告测试结果是PASS或FAIL
+- 基准测试函数是以Benchmark为函数名前缀的函数，它们用于衡量一些函数的性能；go test命令会多次运行基准测试函数以计算一个平均的执行时间
+- 示例函数是以Example为函数名前缀的函数，提供一个由编译器保证正确性的示例文档
+
+go test命令会遍历所有的`*_test.go`文件中符合上述命名规则的函数，生成一个临时的main包用于调用相应的测试函数，接着构建并运行、报告测试结果，最后清理测试中生成的临时文件
+
+# 反射
+
+有时候我们需要编写一个函数能够处理一类并不满足普通公共接口的类型的值，也可能是因为它们并没有确定的表示方式，或者是在我们设计该函数的时候这些类型可能还不存在。没有办法来检查未知类型的表示方式，我们被卡住了。这就是我们为何需要反射的原因
+
+## REFLECT.TYPE 和 REFLECT.VALUE
+
+反射是由 reflect 包提供的。它定义了两个重要的类型，Type 和 Value。一个 Type 表示一个Go类型。它是一个接口，有许多方法来区分类型以及检查它们的组成部分，例如一个结构体的成员或一个函数的参数等。唯一能反映 reflect.Type 实现的是接口的类型描述信息，也正是这个实体标识了接口值的动态类型
+
+函数 reflect.TypeOf 接受任意的 interface{} 类型，并以 reflect.Type 形式返回其动态类型：
+
+```go
+t := reflect.TypeOf(3)  // a reflect.Type
+fmt.Println(t.String()) // "int"
+fmt.Println(t)          // "int"
+```
+
+其中 TypeOf(3) 调用将值 3 传给 interface{} 参数，将一个具体的值转为接口类型会有一个隐式的接口转换操作，它会创建一个包含两个信息的接口值：操作数的动态类型（这里是 int）和它的动态的值（这里是 3）
+
+因为 reflect.TypeOf 返回的是一个动态类型的接口值，它总是返回具体的类型。因此，下面的代码将打印 “*os.File” 而不是 “io.Writer”。稍后，我们将看到能够表达接口类型的 reflect.Type
+
+```go
+var w io.Writer = os.Stdout
+fmt.Println(reflect.TypeOf(w)) // "*os.File"
+```
+
+要注意的是 reflect.Type 接口是满足 fmt.Stringer 接口的。因为打印一个接口的动态类型对于调试和日志是有帮助的， fmt.Printf 提供了一个缩写 %T 参数，内部使用 reflect.TypeOf 来输出：
+
+```go
+fmt.Printf("%T\n", 3) // "int"
+```
+
+reflect 包中另一个重要的类型是 Value。一个 reflect.Value 可以装载任意类型的值。函数 reflect.ValueOf 接受任意的 interface{} 类型，并返回一个装载着其动态值的 reflect.Value。和 reflect.TypeOf 类似，reflect.ValueOf 返回的结果也是具体的类型，但是 reflect.Value 也可以持有一个接口值
+
+```go
+v := reflect.ValueOf(3) // a reflect.Value
+fmt.Println(v)          // "3"
+fmt.Printf("%v\n", v)   // "3"
+fmt.Println(v.String()) // NOTE: "<int Value>"
+```
+
+和 reflect.Type 类似，reflect.Value 也满足 fmt.Stringer 接口，但是除非 Value 持有的是字符串，否则 String 方法只返回其类型。而使用 fmt 包的 %v 标志参数会对 reflect.Values 特殊处理
+
+对 Value 调用 Type 方法将返回具体类型所对应的 reflect.Type：
+
+```go
+t := v.Type()           // a reflect.Type
+fmt.Println(t.String()) // "int"
+```
+
+reflect.ValueOf 的逆操作是 reflect.Value.Interface 方法。它返回一个 interface{} 类型，装载着与 reflect.Value 相同的具体值：
+
+```go
+v := reflect.ValueOf(3) // a reflect.Value
+x := v.Interface()      // an interface{}
+i := x.(int)            // an int
+fmt.Printf("%d\n", i)   // "3"
+```
+
+reflect.Value 和 interface{} 都能装载任意的值。所不同的是，一个空的接口隐藏了值内部的表示方式和所有方法，因此只有我们知道具体的动态类型才能使用类型断言来访问内部的值（就像上面那样），内部值我们没法访问。相比之下，一个 Value 则有很多方法来检查其内容
+
+反射能够访问到结构体中未导出的成员
+
+## 通过REFLECT.VALUE修改值
+
+Go语言中类似x、x.f[1]和*p形式的表达式都可以表示变量，但是其它如x + 1和f(2)则不是变量。一个变量就是一个可寻址的内存空间，里面存储了一个值，并且存储的值可以通过内存地址来更新
+
+对于reflect.Values也有类似的区别。有一些reflect.Values是可取地址的；其它一些则不可以。考虑以下的声明语句：
+
+```go
+x := 2                   // value   type    variable?
+a := reflect.ValueOf(2)  // 2       int     no
+b := reflect.ValueOf(x)  // 2       int     no
+c := reflect.ValueOf(&x) // &x      *int    no
+d := c.Elem()            // 2       int     yes (x)
+```
+
+其中a对应的变量不可取地址。因为a中的值仅仅是整数2的拷贝副本。b中的值也同样不可取地址。c中的值还是不可取地址，它只是一个指针`&x`的拷贝。实际上，所有通过reflect.ValueOf(x)返回的reflect.Value都是不可取地址的。但是对于d，它是c的解引用方式生成的，指向另一个变量，因此是可取地址的。我们可以通过调用reflect.ValueOf(&x).Elem()，来获取任意变量x对应的可取地址的Value
+
+我们可以通过调用reflect.Value的CanAddr方法来判断其是否可以被取地址：
+
+```go
+fmt.Println(a.CanAddr()) // "false"
+fmt.Println(b.CanAddr()) // "false"
+fmt.Println(c.CanAddr()) // "false"
+fmt.Println(d.CanAddr()) // "true"
+```
+
+每当我们通过指针间接地获取的reflect.Value都是可取地址的，即使开始的是一个不可取地址的Value。在反射机制中，所有关于是否支持取地址的规则都是类似的。例如，slice的索引表达式e[i]将隐式地包含一个指针，它就是可取地址的，即使开始的e表达式不支持也没有关系。以此类推，reflect.ValueOf(e).Index(i)对应的值也是可取地址的，即使原始的reflect.ValueOf(e)不支持也没有关系
+
+要从变量对应的可取地址的reflect.Value来访问变量需要三个步骤：
+
+1. 调用Addr()方法，它返回一个Value，里面保存了指向变量的指针
+2. 在Value上调用Interface()方法，也就是返回一个interface{}，里面包含指向变量的指针
+3. 知道变量的类型，我们可以使用类型的断言机制将得到的interface{}类型的接口强制转为普通的类型指针。这样我们就可以通过这个普通指针来更新变量了：
+
+```go
+x := 2
+d := reflect.ValueOf(&x).Elem()   // d refers to the variable x
+px := d.Addr().Interface().(*int) // px := &x
+*px = 3                           // x = 3
+fmt.Println(x)                    // "3"
+```
+
+或者，不使用指针，而是通过调用可取地址的reflect.Value的reflect.Value.Set方法来更新对应的值：
+
+```go
+d.Set(reflect.ValueOf(4))
+fmt.Println(x) // "4"
+```
+
+Set方法将在运行时执行和编译时进行类似的可赋值性约束的检查。以上代码，变量和值都是int类型，但是如果变量是int64类型，那么程序将抛出一个panic异常，所以关键问题是要确保改类型的变量可以接受对应的值：
+
+```go
+d.Set(reflect.ValueOf(int64(5))) // panic: int64 is not assignable to int
+```
+
+同样，对一个不可取地址的reflect.Value调用Set方法也会导致panic异常：
+
+```go
+x := 2
+b := reflect.ValueOf(x)
+b.Set(reflect.ValueOf(3)) // panic: Set using unaddressable value
+```
+
+这里有很多用于基本数据类型的Set方法：SetInt、SetUint、SetString和SetFloat等。
+
+```go
+d := reflect.ValueOf(&x).Elem()
+d.SetInt(3)
+fmt.Println(x) // "3"
+```
+
+从某种程度上说，这些Set方法总是尽可能地完成任务。以SetInt为例，只要变量是某种类型的有符号整数就可以工作，即使是一些命名的类型、甚至只要底层数据类型是有符号整数就可以，而且如果对于变量类型值太大的话会被自动截断。但需要谨慎的是：对于一个引用interface{}类型的reflect.Value调用SetInt会导致panic异常，即使那个interface{}变量对于整数类型也不行
+
+```go
+x := 1
+rx := reflect.ValueOf(&x).Elem()
+rx.SetInt(2)                     // OK, x = 2
+rx.Set(reflect.ValueOf(3))       // OK, x = 3
+rx.SetString("hello")            // panic: string is not assignable to int
+rx.Set(reflect.ValueOf("hello")) // panic: string is not assignable to int
+
+var y interface{}
+ry := reflect.ValueOf(&y).Elem()
+ry.SetInt(2)                     // panic: SetInt called on interface Value
+ry.Set(reflect.ValueOf(3))       // OK, y = int(3)
+ry.SetString("hello")            // panic: SetString called on interface Value
+ry.Set(reflect.ValueOf("hello")) // OK, y = "hello"
+```
+
+一个可取地址的reflect.Value会记录一个结构体成员是否是未导出成员，如果是的话则拒绝修改操作。因此，CanAddr方法并不能正确反映一个变量是否是可以被修改的。另一个相关的方法CanSet是用于检查对应的reflect.Value是否是可取地址并可被修改的：
+
+```go
+fmt.Println(fd.CanAddr(), fd.CanSet()) // "true false"
+```
+
+## 显示一个类型的方法集
+
+使用reflect.Type来打印任意值的类型和枚举它的方法：
+
+```go
+// Print prints the method set of the value x.
+func Print(x interface{}) {
+	v := reflect.ValueOf(x)
+	t := v.Type()
+	fmt.Printf("type %s\n", t)
+
+	for i := 0; i < v.NumMethod(); i++ {
+		methType := v.Method(i).Type()
+		fmt.Printf("func (%s) %s%s\n", t, t.Method(i).Name,
+			strings.TrimPrefix(methType.String(), "func"))
+	}
+}
+```
+
+reflect.Type和reflect.Value都提供了一个Method方法。每次t.Method(i)调用将一个reflect.Method的实例，对应一个用于描述一个方法的名称和类型的结构体。每次v.Method(i)方法调用都返回一个reflect.Value以表示对应的值，也就是一个方法是帮到它的接收者的。使用reflect.Value.Call方法（我们这里没有演示），将可以调用一个Func类型的Value，但是这个例子中只用到了它的类型。
+
+这是属于time.Duration和`*strings.Replacer`两个类型的方法：
+
+```go
+methods.Print(time.Hour)
+// Output:
+// type time.Duration
+// func (time.Duration) Hours() float64
+// func (time.Duration) Minutes() float64
+// func (time.Duration) Nanoseconds() int64
+// func (time.Duration) Seconds() float64
+// func (time.Duration) String() string
+
+methods.Print(new(strings.Replacer))
+// Output:
+// type *strings.Replacer
+// func (*strings.Replacer) Replace(string) string
+// func (*strings.Replacer) WriteString(io.Writer, string) (int, error)
+```
+
