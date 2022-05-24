@@ -624,6 +624,9 @@ $ go list -json hash
 
 ### 简单io
 
+> - [https://blog.csdn.net/wohu1104/article/details/106433545](https://blog.csdn.net/wohu1104/article/details/106433545)
+> - [https://blog.csdn.net/qq_25100257/article/details/120937548](https://blog.csdn.net/qq_25100257/article/details/120937548)
+
 - fmt：Scanf、Sprintf等等
 
 - bufio包：
@@ -848,6 +851,8 @@ func main() {
 }
 
 ```
+
+[导出和暴露问题](https://blog.csdn.net/weixin_33709219/article/details/86023269)
 
 ### 数组和切片
 
@@ -2504,6 +2509,8 @@ func handler(w http.ResponseWriter, r *http.Request) {
 不同的方法 → 注册到不同的ServerMux → 运行
 
 go http包提供了默认的DefaultServerMux，监听时传入nil即可
+
+[post请求](https://blog.csdn.net/YMY_mine/article/details/98496009)
 
 ## 练习题
 
